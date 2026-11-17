@@ -1485,6 +1485,7 @@ html.platform-mac .app-header {
   padding-top: 8px;
   overflow-y: auto;
   flex: 1;
+  align-content: start;
 }
 
 .episode-btn {
