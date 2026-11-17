@@ -482,7 +482,10 @@ function createAccountService(options = {}) {
       let source = 'read_progress';
       const payload = await apiRequest('/reading/bookapi/read_progress/list/v1/', { book_types: '2', limit: '50' });
       const data = payload?.data || {};
-      const rows = Array.isArray(data.video_data) ? data.video_data : Array.isArray(data.data?.video_data) ? data.data.video_data : [];
+      // read_progress/list 的 video_data 实测在响应顶层（亦兼容 data / data.data 嵌套）。
+      const rows = Array.isArray(payload?.video_data) ? payload.video_data
+        : Array.isArray(data.video_data) ? data.video_data
+        : Array.isArray(data.data?.video_data) ? data.data.video_data : [];
       items = rows.map(mapProgressRow).filter(Boolean);
       if (!items.length) {
         // 回退：jackotom 的 read_history 端点（HGTV 实测其对短剧可能恒空，故仅作回退）
@@ -527,21 +530,34 @@ function createAccountService(options = {}) {
     }
   }
 
-  // 收藏记录：mget action_type=1/2 才是收藏列表（3/4 为点赞列表）。剧名取 video_detail.series_title。
+  // 收藏记录：App「我的收藏」真实走视频书架 bookshelf/video/info/v1/（data.video_shelf_info，
+  // 剧集级条目）；ugc action mget 是互动流水，与 App 书架不一致。协议证据：
+  // N3urda/hongguoTV CloudAccount.kt favorites/parseFavorites（源 HGTV AccountParser.favorites）。
   async function favorites() {
     if (!loggedIn()) return needLogin();
     try {
-      const payload = await apiRequest('/reading/ugc/action/mget/v1/', { action_type: '1', object_type_list: '6,15,10', count: '50', offset: '0' });
-      const rows = Array.isArray(payload?.data?.mixed_data_list) ? payload.data.mixed_data_list : [];
+      const payload = await apiRequest('/reading/bookapi/bookshelf/video/info/v1/', {});
+      const rows = Array.isArray(payload?.data?.video_shelf_info) ? payload.data.video_shelf_info : [];
       const items = [];
+      const seen = new Set();
       for (const row of rows) {
-        const video = row?.video_data || row?.book_data;
-        const mapped = mapProgressRow(video);
-        if (!mapped) continue;
-        mapped.favorited_at = toMs(video?.user_collect_timestamp_ms ?? row.user_collect_timestamp_ms ?? row.create_time);
-        mapped.position_ms = 0;
-        mapped.duration_ms = 0;
-        items.push(mapped);
+        if (!row || typeof row !== 'object') continue;
+        const video = row.video_data && typeof row.video_data === 'object' ? row.video_data : row;
+        const seriesId = digits(video.series_id || row.series_id || row.book_id);
+        const title = str(row.series_title || video.title || row.book_name);
+        if (!seriesId || !title || seen.has(seriesId)) continue;
+        seen.add(seriesId);
+        items.push({
+          series_id: seriesId,
+          vid: '',
+          title,
+          cover: normalizeCover(row.series_cover_url || video.cover || video.cover_url || video.thumb_url || row.thumb_url),
+          episode_index: 1,
+          episode_count: Math.max(0, Number(video.episode_cnt || video.episode_count || row.episode_cnt) || 0),
+          position_ms: 0,
+          duration_ms: 0,
+          favorited_at: toMs(row.collect_time),
+        });
       }
       await enrichTitles(items);
       items.sort((a, b) => b.favorited_at - a.favorited_at);
@@ -697,9 +713,48 @@ function createAccountService(options = {}) {
     }
   }
 
+  // 播放进度云端上报：read_progress/upload/v1/，write_mode=1 同时写进度与历史（官方 App 播放记录可见）。
+  // 字段名与单位必须精确：毫秒、vid_index 从 1 起、book_id/item_id 用字符串防 19 位精度丢失；
+  // 用 series_id/vid 等错误键名会假成功 code=0 但实际不写。
+  async function reportProgress({ seriesId, vid, episodeIndex, positionSec, durationSec, episodeCount }) {
+    if (!loggedIn()) return { success: false, need_login: true, error: '请先扫码登录红果账号' };
+    const bookId = digits(seriesId);
+    const itemId = digits(vid);
+    const index = Number(episodeIndex);
+    if (!/^\d{6,30}$/.test(bookId) || !/^\d{6,30}$/.test(itemId) || !Number.isInteger(index) || index < 1) {
+      return { success: false, error: '播放上报参数无效' };
+    }
+    const posMs = Math.max(0, Math.round((Number(positionSec) || 0) * 1000));
+    const totalMs = Math.max(0, Math.round((Number(durationSec) || 0) * 1000));
+    const rate = totalMs > 0 ? Math.min(1, posMs / totalMs).toFixed(4) : '0';
+    const book = {
+      book_id: bookId,
+      item_id: itemId,
+      vid_index: index,
+      current_play_time: posMs,
+      current_total_time: totalMs,
+      read_timestamp_ms: Date.now(),
+      book_type: 2,
+      progress_rate: rate,
+      player_cumulative_total_duration: posMs,
+    };
+    const count = Number(episodeCount);
+    if (Number.isInteger(count) && count > 0) book.episode_count = count;
+    try {
+      await apiRequest('/reading/bookapi/read_progress/upload/v1/', {}, {
+        payload: JSON.stringify({ books: [book], write_mode: 1 }),
+        gzip: false,
+      });
+      return { success: true, error: '' };
+    } catch (error) {
+      logger.warn('Account', `播放进度上报失败: ${safeMessage(error)}`);
+      return { success: false, error: '播放记录同步失败，请稍后重试' };
+    }
+  }
+
   return {
     startLogin, pollLogin, logout, status, profile,
-    history, likes, favorites, reserves, related, reserve, setSocialAction,
+    history, likes, favorites, reserves, related, reserve, setSocialAction, reportProgress,
     loggedIn,
     // 测试与复用需要的内部件
     _jar: jar, _apiRequest: apiRequest, _webJson: webJson,

@@ -372,28 +372,26 @@ test('normalizeCover：HEIC/fqnovelpic 签名封面重建为可显示的 byteimg
   assert.equal(normalizeCover(null), '');
 });
 
-test('收藏记录：action_type=1（真实收藏列表），剧名取 video_detail.series_title，按收藏时间降序', async () => {
+test('收藏记录：视频书架 bookshelf/video/info（App 真实收藏），剧集级去重、按收藏时间降序', async () => {
   const dir = tmpDir();
   const service = loggedInService(dir, {
-    '/reading/ugc/action/mget/v1/': (url) => {
-      assert.equal(url.searchParams.get('action_type'), '1');
-      assert.equal(url.searchParams.get('object_type_list'), '6,15,10');
-      return ok({
-        code: 0,
-        data: {
-          mixed_data_list: [
-            { video_data: { series_id: '111222333', title: '分集宣传文案', episode_cnt: 10, user_collect_timestamp_ms: 1763000000000, video_detail: { series_title: '早收藏剧' } } },
-            { video_data: { series_id: '444555666', episode_cnt: 20, video_detail: { series_title: '晚收藏剧' } }, create_time: 1763100000 },
-          ],
-        },
-      });
-    },
+    '/reading/bookapi/bookshelf/video/info/v1/': () => ok({
+      code: 0,
+      data: {
+        video_shelf_info: [
+          { series_id: '111222333', series_title: '早收藏剧', episode_cnt: 10, collect_time: 1763000000, video_data: { title: '分集宣传文案' } },
+          { book_id: '444555666', book_name: '晚收藏剧', collect_time: 1763100000, video_data: { series_id: '444555666', episode_cnt: 20 } },
+          { series_id: '111222333', series_title: '早收藏剧', collect_time: 1762900000 },
+        ],
+      },
+    }),
   });
   const result = await service.favorites();
   assert.equal(result.success, true);
-  assert.equal(result.items.length, 2);
-  assert.equal(result.items[0].title, '晚收藏剧'); // 降序 + 取剧名而非分集文案
+  assert.equal(result.items.length, 2); // 同 series_id 去重
+  assert.equal(result.items[0].title, '晚收藏剧'); // 降序 + 取剧集级剧名而非分集文案
   assert.equal(result.items[0].favorited_at, 1763100000000);
+  assert.equal(result.items[0].episode_count, 20);
   assert.equal(result.items[1].title, '早收藏剧');
   assert.equal(result.items[1].position_ms, 0);
   fs.rmSync(dir, { recursive: true, force: true });
@@ -430,6 +428,43 @@ test('互动写入：重复添加 101045 视为已生效；非法 vid/动作拒�
   assert.equal(badVid.success, false);
   const badType = await service.setSocialAction({ vid: '7706514645208534041', actionType: 9 });
   assert.equal(badType.success, false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('播放上报：upload/v1/ 毫秒单位、字符串 book_id/item_id、write_mode=1', async () => {
+  const dir = tmpDir();
+  let captured = null;
+  const service = loggedInService(dir, {
+    '/reading/bookapi/read_progress/upload/v1/': (url, config) => {
+      captured = { method: config.method, body: JSON.parse(config.data) };
+      return ok({ code: 0, message: 'SUCCESS', data: { upload_timestamp: 1794906186 } });
+    },
+  });
+  const res = await service.reportProgress({ seriesId: '7705722548046023742', vid: '7705722862400719897', episodeIndex: 1, positionSec: 5, durationSec: 138.369, episodeCount: 379 });
+  assert.equal(res.success, true);
+  assert.equal(captured.method, 'POST');
+  assert.equal(captured.body.write_mode, 1);
+  const b = captured.body.books[0];
+  assert.equal(b.book_id, '7705722548046023742');
+  assert.equal(b.item_id, '7705722862400719897');
+  assert.equal(b.vid_index, 1);
+  assert.equal(b.current_play_time, 5000);
+  assert.equal(b.current_total_time, 138369);
+  assert.equal(b.episode_count, 379);
+  assert.equal(b.book_type, 2);
+  assert.equal(typeof b.progress_rate, 'string');
+  assert.equal(b.player_cumulative_total_duration, 5000);
+  assert.ok(Number.isInteger(b.read_timestamp_ms));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('播放上报：非法 book_id/vid_index 拒绝', async () => {
+  const dir = tmpDir();
+  const service = loggedInService(dir, {});
+  const bad = await service.reportProgress({ seriesId: '0', vid: '7705722862400719897', episodeIndex: 1, positionSec: 1, durationSec: 1 });
+  assert.equal(bad.success, false);
+  const badIdx = await service.reportProgress({ seriesId: '7705722548046023742', vid: '7705722862400719897', episodeIndex: 0, positionSec: 1, durationSec: 1 });
+  assert.equal(badIdx.success, false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

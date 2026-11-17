@@ -334,6 +334,12 @@
 }
 .danmaku-send-btn:hover:not(:disabled) { background: var(--accent-hover); }
 .danmaku-send-btn:disabled { opacity: 0.45; cursor: default; }
+/* 内联发送框：嵌入底部控制排（弹幕设置左侧），紧凑高度对齐其余按钮 */
+.danmaku-send-inline { padding: 0; align-items: center; flex: none; }
+.danmaku-send-inline input { flex: none; width: 200px; padding: 6px 14px; font-size: 12px; }
+.danmaku-send-inline .danmaku-send-btn { padding: 6px 14px; font-size: 12px; }
+@media (max-width: 1100px) { .danmaku-send-inline input { width: 140px; } }
+@media (max-width: 820px) { .danmaku-send-inline input { width: 100px; } .danmaku-send-inline .danmaku-send-btn { padding: 6px 10px; } }
 
 /* ================= 播放右侧互动操作栏（红果式） ================= */
 .player-action-rail {

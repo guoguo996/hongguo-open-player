@@ -275,6 +275,20 @@ app.post('/api/account/collect', async (req, res) => {
   } catch (err) { sendApiError(res, err); }
 });
 
+// 写操作：播放进度云端上报（read_progress/upload，write_mode=1 同时写进度+历史），需登录。
+// 由播放器在保存本地进度时随同节流上报，使官方 App 播放记录同步可见。
+app.post('/api/account/progress', async (req, res) => {
+  const { series_id: seriesId, vid, episode_index: episodeIndex, position_sec: positionSec, duration_sec: durationSec, episode_count: episodeCount } = req.body || {};
+  if (!validSeriesId(seriesId) || !validSeriesId(vid)) return res.status(400).json({ error: '剧集或视频编号无效' });
+  try {
+    const result = await accountService().reportProgress({
+      seriesId: seriesId.trim(), vid: vid.trim(), episodeIndex, positionSec, durationSec, episodeCount,
+    });
+    res.set('Cache-Control', 'no-store');
+    res.json(result);
+  } catch (err) { sendApiError(res, err); }
+});
+
 // 相关作品（含待上线的下一季候选），匿名可读。
 app.get('/api/series/:seriesId/related', async (req, res) => {
   const { seriesId } = req.params;

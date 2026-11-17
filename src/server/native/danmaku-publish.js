@@ -20,8 +20,12 @@ const { resolveDeviceIdentity } = require('./danmaku');
 
 const BASE_URL = 'https://api5-normal-sinfonlineb.fqnovel.com';
 const ADD_PATH = '/novel/commentapi/comment/add/v1/';
+// 社区写功能（发弹幕）疑绑定较新客户端 profile：参考实现把时间轴弹幕读取升级到
+// 74332/7.4.3.32，而匿名读 profile 为 73532。发送沿用 73532 时上游回 103008「无社区功能」，
+// 故写请求改用 74332 profile（query 版本与 UA 成套）。该假设待实测确认。
+const WRITE_VERSION = { versionCode: '74332', versionName: '7.4.3.32' };
 const USER_AGENT =
-  'com.phoenix.read/73532 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; ' +
+  'com.phoenix.read/74332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; ' +
   'Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)';
 const MAX_SEND_LEN = 200;
 const REQUEST_TIMEOUT = 15000;
@@ -98,7 +102,7 @@ async function publishDanmaku(options = {}) {
     const stamp = Math.floor(stampMs / 1000);
     const nonce = random(sign.NONCE_BYTES);
     const { deviceId, installId } = options.device || await resolveDeviceIdentity();
-    const rawQuery = sign.buildQuery({ stampMs, deviceId, installId });
+    const rawQuery = sign.buildQuery({ stampMs, deviceId, installId, version: WRITE_VERSION });
     const url = `${BASE_URL}${ADD_PATH}?${rawQuery}`;
     const body = JSON.stringify(buildPublishBody({ vid, seriesId, text, offsetMs, durationMs }));
     const headers = {
@@ -109,7 +113,7 @@ async function publishDanmaku(options = {}) {
       'Content-Type': 'application/json; charset=utf-8',
       'Comment-Source': '601',
       'Server-Channel': '1000',
-      ...sign.signCommentHeaders({ rawQuery, stamp, nonce }),
+      ...sign.signCommentHeaders({ rawQuery, stamp, nonce, body }),
       'X-SS-STUB': md5Upper(body),
       Cookie: account._jar.cookieString(),
     };
@@ -124,14 +128,28 @@ async function publishDanmaku(options = {}) {
     const raw = typeof response?.data === 'string' ? response.data : JSON.stringify(response?.data ?? null);
     let payload;
     try { payload = JSON.parse(raw); } catch (_) {
+      console.warn('[danmaku-publish] 非 JSON 响应（推断端点可能失效）:', raw.slice(0, 300));
       return { ...base, notice: '弹幕发送接口返回了非 JSON 内容（推断端点可能已失效）' };
     }
     const code = Number(payload?.code ?? payload?.Code ?? payload?.status_code ?? -1);
+    const upstreamMessage = String(payload?.message ?? payload?.msg ?? payload?.status_msg ?? '').trim();
     if (code !== 0) {
-      return { ...base, notice: `弹幕发送被拒绝（code=${code}）。该接口为社区推断实现，可能已失效或需要额外参数` };
+      // 透传上游真实 code/message 供诊断（界面仍用中文 notice）。该端点为推断实现，
+      // 真实拒绝原因（缺参/签名/风控/端点失效）需据此实测迭代。
+      console.warn(`[danmaku-publish] 上游拒绝 code=${code} message=${upstreamMessage || '(无)'}`);
+      return {
+        ...base,
+        upstream_code: code,
+        upstream_message: upstreamMessage,
+        notice: `弹幕发送被拒绝（code=${code}${upstreamMessage ? `：${upstreamMessage}` : ''}）。该接口为社区推断实现，可能已失效或需要额外参数`,
+      };
     }
-    return { success: true, unverified: true, notice: '弹幕已发送', error: '' };
+    return { success: true, unverified: true, notice: '弹幕已发送', error: '', upstream_code: 0 };
   } catch (error) {
+    if (error?.response) {
+      const snippet = typeof error.response.data === 'string' ? error.response.data.slice(0, 300) : JSON.stringify(error.response.data ?? null).slice(0, 300);
+      console.warn(`[danmaku-publish] HTTP ${error.response.status} 响应: ${snippet}`);
+    }
     const notice = error?.code === 'ECONNABORTED' || error?.name === 'TimeoutError' || error?.code === 'ERR_CANCELED'
       ? '弹幕发送超时，请稍后重试'
       : error?.response

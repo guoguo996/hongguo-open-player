@@ -306,7 +306,6 @@ const ACCOUNT_API_ALLOWLIST = [
     '/reading/user/info/v1/',
     '/reading/bookapi/read_history/list/v1/',
     '/reading/bookapi/read_progress/list/v1/',
-    '/reading/bookapi/read_progress/upload/v1/', // TEMP-PROBE 研究用，结束后删除
     '/reading/bookapi/multi-detail/v1/',
     '/reading/bookapi/bookshelf/video/info/v1/',
     '/reading/ugc/action/mget/v1/',
@@ -314,6 +313,7 @@ const ACCOUNT_API_ALLOWLIST = [
     '/reading/bookapi/search/uncover_subscribe/v1/',
     '/reading/bookapi/plan/v:version/',
     '/reading/ugc/action/set/v1/',
+    '/reading/bookapi/read_progress/upload/v1/',
 ];
 function signedAccountRequest(apiPath, values = {}, identity, { payload = null, gzip = false, host = 'api5-normal-sinfonlinea.fqnovel.com' } = {}) {
     if (!ACCOUNT_API_ALLOWLIST.includes(apiPath)) throw Object.assign(new Error('不支持的账号接口'), { code: 'APP_INPUT' });

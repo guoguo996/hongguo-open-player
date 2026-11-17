@@ -630,9 +630,19 @@ const app = createApp({
       }
     }
 
+    // 本地会话 Cookie 自愈：服务重启后旧 Cookie 作废会返 401，先 GET / 重建会话再重试一次。
+    async function apiFetch(url, options) {
+      let response = await fetch(url, options);
+      if (response.status === 401) {
+        try { await fetch('/', { cache: 'no-store' }); } catch (_) {}
+        response = await fetch(url, options);
+      }
+      return response;
+    }
+
     async function loadAccountStatus() {
       try {
-        const data = await fetch('/api/account/status').then(r => r.json());
+        const data = await apiFetch('/api/account/status').then(r => r.json());
         if (data?.success) account.value = data;
       } catch (_) {}
     }
@@ -758,7 +768,7 @@ const app = createApp({
       slot.loading = true;
       slot.notice = '';
       try {
-        const data = await fetch(`/api/account/${kind}`).then(r => r.json());
+        const data = await apiFetch(`/api/account/${kind}`).then(r => r.json());
         if (data?.success) {
           slot.items = Array.isArray(data.items) ? data.items : [];
           slot.notice = data.notice || '';
@@ -900,7 +910,7 @@ const app = createApp({
       if (!seriesId || !ep?.vid) { notify('当前剧集信息不完整，无法发送'); return; }
       sendingDanmaku.value = true;
       try {
-        const data = await fetch('/api/danmaku/publish', {
+        const data = await apiFetch('/api/danmaku/publish', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             series_id: String(seriesId), vid: String(ep.vid), text,
@@ -2214,6 +2224,7 @@ const app = createApp({
       danmakuEngine?.pause?.();
       if (navigator.mediaSession) navigator.mediaSession.playbackState = 'paused';
       saveProgressNow();
+      reportCloudProgress(true);
       setControlsHidden(false);
       clearTimeout(controlsHideTimer);
     }
@@ -2422,6 +2433,7 @@ const app = createApp({
             episode_index: activeEpisodeIndex.value,
             position_sec: currentTime.value,
             duration_sec: duration.value,
+            episode_count: activeSeries.value.total,
           }),
         });
       } catch (_) { /* 云端上报失败不影响本地进度 */ }

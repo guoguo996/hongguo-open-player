@@ -25,7 +25,6 @@
           <button class="nav-item" :class="{ active: currentTab === 'comic-drama' && viewMode === 'catalog' }" @click="switchTab('comic-drama')">🎨 精品漫剧</button>
           <button class="nav-item" :class="{ active: currentTab === 'ai-drama' && viewMode === 'catalog' }" @click="switchTab('ai-drama')">🤖 AI 短剧</button>
           <button class="nav-item" :class="{ active: currentTab === 'history' }" @click="switchTab('history')">🕒 观影历史</button>
-          <button class="nav-item" :class="{ active: currentTab === 'favorites' }" @click="switchTab('favorites')">⭐ 我的收藏</button>
           <button class="nav-item" :class="{ active: currentTab === 'cloud-history' }" @click="switchTab('cloud-history')">▶ 播放记录</button>
           <button class="nav-item" :class="{ active: currentTab === 'cloud-likes' }" @click="switchTab('cloud-likes')">❤ 点赞记录</button>
           <button class="nav-item" :class="{ active: currentTab === 'cloud-favorites' }" @click="switchTab('cloud-favorites')">★ 收藏记录</button>
@@ -481,23 +480,6 @@
               <div class="progress-bar-thumb" :style="{ left: playedPercent + '%' }"></div>
             </div>
 
-            <!-- 弹幕发送条（登录后可用，投放到当前播放时间点） -->
-            <div class="danmaku-send-bar" @pointerenter="clearControlsTimer" @pointerleave="resetControlsTimer">
-              <input
-                type="text"
-                v-model="danmakuText"
-                maxlength="200"
-                :placeholder="account.logged_in ? '发个弹幕吧～回车发送，投放到当前时间点' : '扫码登录红果账号后可发弹幕'"
-                :disabled="sendingDanmaku"
-                aria-label="弹幕内容"
-                @focus="clearControlsTimer"
-                @keydown.enter.stop="!$event.isComposing && sendDanmaku()"
-              />
-              <button class="danmaku-send-btn" :disabled="sendingDanmaku || !danmakuText.trim()" @click="sendDanmaku">
-                {{ sendingDanmaku ? '发送中…' : '发送' }}
-              </button>
-            </div>
-
             <div class="controls-toolbar">
               <div class="controls-left">
                 <button class="ctrl-btn" @click="togglePlay" :title="isPlaying ? '暂停 (Space)' : '播放 (Space)'">
@@ -513,6 +495,22 @@
               </div>
 
               <div class="controls-right">
+                <!-- 弹幕发送框：与其余控制同排，位于弹幕显示设置左侧 -->
+                <div class="danmaku-send-bar danmaku-send-inline" @pointerenter="clearControlsTimer" @pointerleave="resetControlsTimer">
+                  <input
+                    type="text"
+                    v-model="danmakuText"
+                    maxlength="200"
+                    :placeholder="account.logged_in ? '发个弹幕吧～回车发送' : '登录后可发弹幕'"
+                    :disabled="sendingDanmaku"
+                    aria-label="弹幕内容"
+                    @focus="clearControlsTimer"
+                    @keydown.enter.stop="!$event.isComposing && sendDanmaku()"
+                  />
+                  <button class="danmaku-send-btn" :disabled="sendingDanmaku || !danmakuText.trim()" @click="sendDanmaku">
+                    {{ sendingDanmaku ? '发送中…' : '发送' }}
+                  </button>
+                </div>
                 <div class="danmaku-control">
                   <button class="danmaku-button" :class="{ active: danmakuEnabled }" @click="showDanmakuSettings = !showDanmakuSettings" :aria-expanded="showDanmakuSettings" title="弹幕设置">弹幕</button>
                   <div v-if="showDanmakuSettings" class="danmaku-panel" @pointerenter="clearControlsTimer" @pointerleave="resetControlsTimer">
