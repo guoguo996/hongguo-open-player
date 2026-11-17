@@ -851,4 +851,68 @@ async function fetchAppPlayUrl(vid, options = {}) {
     return await parseEntryPlayInfo(vid, currentEntry, requestedQuality, allowLowerQuality, deadline, signal, options.allowBytevc2 === true, allowHevc, allowHevcTranscode);
 }
 
-module.exports = { fetchAppPlayUrl, clearEntryCache, isHevcCodec, signedSearchRequest, signedMetadataRequest, signedAccountRequest, parseSearchInteger, requestJson, playbackRequest, shortplayRequest, SEARCH_API, SEARCH_UA };
+// 分集互动统计（点赞/评论数按集返回，与红果 App 右侧互动栏一致）
+const SOCIAL_API = 'https://reading.snssdk.com/novel/player/multi_video_detail/preload/v1';
+const SOCIAL_API_FALLBACK = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_detail/preload/v1';
+const SOCIAL_CACHE_TTL_MS = 3 * 60 * 1000;
+const socialCache = new Map();
+
+async function fetchSeriesEpisodeSocial(seriesId, callerSignal) {
+    const sid = String(seriesId || '').trim();
+    if (!/^\d{1,30}$/.test(sid)) throw new Error('剧集编号无效');
+    const cached = socialCache.get(sid);
+    if (cached && cached.expires > Date.now()) return cached.data;
+
+    const deadline = Date.now() + 12000;
+    const timeoutSignal = AbortSignal.timeout(12000);
+    const signal = callerSignal ? AbortSignal.any([timeoutSignal, callerSignal]) : timeoutSignal;
+    const payload = JSON.stringify({
+        biz_param: { detail_page_version: 0, device_level: 1, disable_digg_stat: false, disable_video_relate_book: false, need_all_video_definition: true, need_mp4_align: false, use_os_player: false, use_server_dns: false, video_platform: 1024 },
+        series_id: sid,
+        dr_scene: 'preload',
+    });
+    const playbackId = crypto.randomUUID();
+    const execRequestJson = (url, requestOptions, ...args) => requestJson(url,
+        { ...requestOptions, diagnostics: { playback_id: playbackId } }, ...args);
+    const device = await getPlaybackDevice(execRequestJson, signal);
+
+    let response = null;
+    let lastError = null;
+    for (const apiBase of [SOCIAL_API, SOCIAL_API_FALLBACK]) {
+        try {
+            const signed = playbackRequest(payload, device, apiBase);
+            response = await execRequestJson(signed.url, { method: 'POST', headers: signed.headers, data: signed.body }, deadline, signal);
+            if (response?.data?.[sid]?.video_data) break;
+        } catch (error) {
+            lastError = error;
+            response = null;
+        }
+    }
+    const videoData = response?.data?.[sid]?.video_data;
+    if (!videoData) throw lastError || Object.assign(new Error('分集互动接口未返回数据'), { code: 'MISSING_SOCIAL' });
+
+    const episodes = new Map();
+    for (const item of Array.isArray(videoData.video_list) ? videoData.video_list : []) {
+        const vid = str(item?.vid);
+        if (!vid) continue;
+        episodes.set(vid, {
+            like_count: Number(item.digged_count) || 0,
+            comment_count: Number(item.comment_count) || 0,
+            liked: Boolean(item.user_digg),
+        });
+    }
+    const data = {
+        series_like_count: Number(videoData.digg_cnt) || 0,
+        liked: Boolean(videoData.has_digg),
+        episodes,
+    };
+    socialCache.set(sid, { expires: Date.now() + SOCIAL_CACHE_TTL_MS, data });
+    return data;
+}
+
+function clearSeriesSocialCache(seriesId) {
+    const sid = String(seriesId || '').trim();
+    if (sid) socialCache.delete(sid);
+}
+
+module.exports = { fetchAppPlayUrl, fetchSeriesEpisodeSocial, clearSeriesSocialCache, clearEntryCache, isHevcCodec, signedSearchRequest, signedMetadataRequest, signedAccountRequest, parseSearchInteger, requestJson, playbackRequest, shortplayRequest, SEARCH_API, SEARCH_UA };

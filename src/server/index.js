@@ -166,6 +166,7 @@ app.get('/api/video-comments/:seriesId/:vid', async (req, res) => {
 // ================= 账号：扫码登录 / 云端记录 / 预约 / 发弹幕 =================
 // 服务内部把所有失败转成中文 notice（success:false），路由只负责参数校验与兜底。
 const accountService = () => require('./native/account').getAccountService();
+const clearSeriesSocialCache = seriesId => require('./native/app-source').clearSeriesSocialCache(seriesId);
 const validSeriesId = value => typeof value === 'string' && /^\d{6,30}$/.test(value.trim());
 
 app.get('/api/account/status', (_req, res) => {
@@ -256,6 +257,7 @@ app.post('/api/account/like', async (req, res) => {
   try {
     logger.info('Account', `用户触发点赞: vid=${vid.trim()} action=${action}`);
     const result = await accountService().setSocialAction({ vid: vid.trim(), actionType: action === 'like' ? 3 : 4 });
+    if (result?.success !== false) clearSeriesSocialCache(req.body?.series_id);
     res.set('Cache-Control', 'no-store');
     res.json(result);
   } catch (err) { sendApiError(res, err); }

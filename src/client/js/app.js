@@ -517,12 +517,15 @@ const app = createApp({
       if (!seriesId || !vid || (!force && key === socialKey)) return;
       socialKey = key;
       const info = activeSeries.value?.social_info || {};
+      const episode = activeEpisodes.value.find(e => String(e.vid) === String(vid));
+      const hasEpisodeLikes = episode && Number.isFinite(Number(episode.like_count));
       const flags = deriveSocialFlags();
       socialState.value = {
-        like_count: Number(info.like_count) || 0,
+        // 点赞数按“本集”取，和红果 App 一致；接口不可用时才回退整剧统计
+        like_count: hasEpisodeLikes ? Number(episode.like_count) : (Number(info.like_count) || 0),
         collect_count: Number(info.favorite_count) || 0,
-        comment_count: socialState.value.comment_count || 0,
-        liked: flags.liked,
+        comment_count: Number(episode?.comment_count) || socialState.value.comment_count || 0,
+        liked: episode && typeof episode.liked === 'boolean' ? episode.liked : flags.liked,
         collected: flags.collected,
       };
       // 评论总数：拉首页评论顺带预热抽屉数据。
@@ -597,6 +600,11 @@ const app = createApp({
         if (res.error) throw new Error(res.error);
         socialState.value.liked = next;
         socialState.value.like_count = Math.max(0, socialState.value.like_count + (next ? 1 : -1));
+        const episode = activeEpisodes.value.find(e => String(e.vid) === String(vid));
+        if (episode) {
+          episode.liked = next;
+          episode.like_count = socialState.value.like_count;
+        }
         if (accountRecords.value.likes?.loaded) loadAccountRecords('likes', true);
       } catch (err) {
         notify('点赞失败：' + (err.message || '请稍后重试'));
