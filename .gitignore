@@ -1,0 +1,20 @@
+node_modules/
+dist/
+dist-electron/
+dist-portable-*/
+dist-pkg-*/
+release/
+build/bytevc2/
+data/*.json
+data/*.bak
+*.bak
+.DS_Store
+*.log
+*.apk
+
+# 本地审计与审查记录
+/reviews/
+/docs/review-implementation.md
+.omc
+.workbuddy-ai
+.vscode
