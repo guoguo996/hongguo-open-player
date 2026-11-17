@@ -824,19 +824,30 @@ const app = createApp({
     const isCloudTab = computed(() => !!cloudRecordKind.value);
     watch(() => account.value.logged_in, logged => { if (logged && cloudRecordKind.value) loadAccountRecords(cloudRecordKind.value); });
 
+    // 预约/点赞/收藏记录本身不含观看进度（只有预约记录更只有剧集信息），
+    // 回查账号云端播放记录里同一部剧的进度，用于续播。
+    async function findCloudProgress(seriesId) {
+      if (!account.value.logged_in) return null;
+      const sid = String(seriesId);
+      const pick = () => (accountRecords.value.history?.items || [])
+        .find(i => String(i.series_id) === sid && Number(i.episode_index) > 0) || null;
+      const cached = pick();
+      if (cached || accountRecords.value.history?.loaded) return cached;
+      await loadAccountRecords('history');
+      return pick();
+    }
+
     async function playFromCloudRecord(item) {
       if (!item?.series_id) return;
       closeAccountModal();
-      await openTheater({ series_id: item.series_id, series_title: item.title || '', cover: item.cover || '' });
-      const ep = activeEpisodes.value.find(e => e.vid_index === item.episode_index);
-      if (ep && activeEpisodeIndex.value !== ep.vid_index) switchEpisode(ep);
-      const sec = Math.floor((item.position_ms || 0) / 1000);
-      const v = videoEl.value;
-      if (sec > 1 && v) {
-        const seek = () => { try { if (v.duration && sec < v.duration - 2) v.currentTime = sec; } catch (_) {} };
-        if (v.readyState >= 1) seek();
-        else v.addEventListener('loadedmetadata', seek, { once: true });
-      }
+      // 记录里没有集数时（预约菜单等），按云端播放记录的上次进度续播
+      const progress = item.episode_index ? item : (await findCloudProgress(item.series_id)) || item;
+      const episodeIndex = Number(progress.episode_index) || 0;
+      const resumeSec = Math.floor((progress.position_ms || 0) / 1000);
+      await openTheater(
+        { series_id: item.series_id, series_title: item.title || '', cover: item.cover || '' },
+        { episodeIndex, resumeSec }
+      );
     }
 
     // ── 相关作品与预约下一季（挂在"系列全季"弹窗） ──
@@ -1172,7 +1183,7 @@ const app = createApp({
       const total = activeEpisodes.value.length;
       if (total === 0) return [];
       const groups = [];
-      const size = 30;
+      const size = 80;
       for (let i = 1; i <= total; i += size) {
         groups.push({
           start: i,
@@ -1941,7 +1952,8 @@ const app = createApp({
       if (navigator.mediaSession) { navigator.mediaSession.playbackState = 'none'; navigator.mediaSession.metadata = null; }
     }
 
-    async function openTheater(drama) {
+    // options.episodeIndex / options.resumeSec：外部记录（如云端播放记录）指定的续播位置
+    async function openTheater(drama, options = {}) {
       const request = ++theaterRequest;
       videoErrorMessage.value = '';
       isBuffering.value = true;
@@ -1972,12 +1984,13 @@ const app = createApp({
 
         // 计算初始选集分组
         const groups = episodeGroups.value;
-        currentGroup.value = groups[0] || { start: 1, end: 30 };
+        currentGroup.value = groups[0] || { start: 1, end: 80 };
 
-        // 默认恢复上次观看进度或第一集
-        let targetIndex = detail.episodes[0].vid_index;
-        let resumeSec = 0;
-        if (detail.saved_progress) {
+        // 默认恢复上次观看进度或第一集；外部指定了目标集时以外部为准
+        const optionIndex = Number(options.episodeIndex) || 0;
+        let targetIndex = optionIndex || detail.episodes[0].vid_index;
+        let resumeSec = optionIndex ? Number(options.resumeSec) || 0 : 0;
+        if (!optionIndex && detail.saved_progress) {
           targetIndex = Number(detail.saved_progress.episode_index) || 1;
           resumeSec = Number(detail.saved_progress.position_sec) || 0;
         }
