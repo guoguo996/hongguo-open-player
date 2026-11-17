@@ -4,8 +4,9 @@ dist-electron/
 dist-portable-*/
 dist-pkg-*/
 release/
-data/*.json
-data/*.bak
+data/*
+!data/.gitkeep
+logs/
 *.bak
 .DS_Store
 *.log

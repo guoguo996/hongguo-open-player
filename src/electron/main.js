@@ -26,8 +26,10 @@ async function buildWindow() {
   if (app.isPackaged === false && !process.env.HONGGUO_BVC2_FFMPEG) {
     process.env.HONGGUO_BVC2_FFMPEG = path.join(__dirname, '../../build/bytevc2', process.arch, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
   }
-  process.env.HONGGUO_DATA_DIR = path.join(app.getPath('userData'), 'data');
-  process.env.HONGGUO_LOG_DIR = path.join(app.getPath('userData'), 'logs');
+  // 开发模式下数据与日志存放在项目目录（与 npm start 共用，git 已忽略）；打包版仍用 userData，避免写入安装目录
+  const storageRoot = app.isPackaged ? app.getPath('userData') : path.join(__dirname, '../..');
+  process.env.HONGGUO_DATA_DIR = path.join(storageRoot, 'data');
+  process.env.HONGGUO_LOG_DIR = path.join(storageRoot, 'logs');
   let logger;
   try {
     logger = require('../server/services/logger');
