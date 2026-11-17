@@ -130,10 +130,10 @@ async function browseList(options = {}) {
     let values = {}, body = null;
     if (ranking) {
       values = { tab_type: pg === 1 ? '26' : '18', client_req_type: '2', client_template: '2', background_selected_items: '',
-        category_id: '0', limit: '20', cell_sub_id: '0', gender: '2', cell_id: '7470092475068071998', selected_items: ranking[0],
+        category_id: '0', limit: '30', cell_sub_id: '0', gender: '2', cell_id: '7470092475068071998', selected_items: ranking[0],
         sub_selected_items: ranking[1], panel_selected_items: '', offset: String(cursor.offset), session_id: cursor.sessionId, filter_ids: '', unlimited_selector_change_type: '0' };
     } else {
-      body = { filter_ids: '', req_scene: CATEGORIES[category][0], offset: cursor.offset, need_selector_panel: pg === 1, limit: 15,
+      body = { filter_ids: '', req_scene: CATEGORIES[category][0], offset: cursor.offset, need_selector_panel: pg === 1, limit: 30,
         select_items: { genre: [CATEGORIES[category][1]], sort: ['hot_score'], category_dim_theme: genre ? [genre] : [],
           category_dim_role: [], category_dim_epoch: [], gender: [], online_time: [], creation_status: [] },
         session_id: cursor.sessionId, req_type: pg === 1 ? 'default' : 'only_content', client_req_type: 3 };
