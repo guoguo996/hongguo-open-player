@@ -4,7 +4,6 @@ dist-electron/
 dist-portable-*/
 dist-pkg-*/
 release/
-build/bytevc2/
 data/*.json
 data/*.bak
 *.bak
@@ -18,4 +17,5 @@ data/*.bak
 .omc
 .workbuddy-ai
 .vscode
+.qoder/
 pr106.diff
