@@ -153,6 +153,16 @@ app.get('/api/danmaku/:seriesId/:vid', async (req, res) => {
   res.json(result);
 });
 
+// 视频评论（只读，与弹幕同端点不同通道）。cursor 原样回传翻页。
+app.get('/api/video-comments/:seriesId/:vid', async (req, res) => {
+  const { seriesId, vid } = req.params;
+  if (!/^\d{6,30}$/.test(seriesId) || !/^\d{6,30}$/.test(vid)) return res.status(400).json({ error: '剧集编号无效' });
+  const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : '';
+  const result = await require('./native/video-comments').fetchVideoComments({ seriesId, vid, cursor });
+  res.set('Cache-Control', 'no-store');
+  res.json(result);
+});
+
 // ================= 账号：扫码登录 / 云端记录 / 预约 / 发弹幕 =================
 // 服务内部把所有失败转成中文 notice（success:false），路由只负责参数校验与兜底。
 const accountService = () => require('./native/account').getAccountService();

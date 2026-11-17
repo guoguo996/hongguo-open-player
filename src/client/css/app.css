@@ -1649,6 +1649,14 @@ body.hide-cursor * {
   pointer-events: none;
 }
 
+.player-container.controls-hidden .player-action-rail,
+.player-container:fullscreen.controls-hidden .player-action-rail,
+.player-container.is-fullscreen.controls-hidden .player-action-rail {
+  opacity: 0;
+  transform: translateX(20px);
+  pointer-events: none;
+}
+
 .theater-sidebar { flex-shrink: 0; }
 html.platform-win .app-header { padding-right: 160px; }
 

@@ -368,6 +368,35 @@
               <h4>{{ videoErrorMessage }}</h4>
               <button class="retry-btn" @click="retryCurrentEpisode">重试本集</button>
             </div>
+
+            <!-- 红果式右侧互动操作栏 -->
+            <div class="player-action-rail">
+              <button
+                class="rail-btn rail-like"
+                :class="{ active: socialState.liked }"
+                :disabled="socialBusy"
+                :title="account.logged_in ? (socialState.liked ? '取消点赞' : '点赞') : '登录后点赞'"
+                @click="toggleLike">
+                <span class="rail-icon">{{ socialState.liked ? '❤️' : '🤍' }}</span>
+                <span class="rail-count">{{ formatCount(socialState.like_count) }}</span>
+              </button>
+              <button
+                class="rail-btn rail-comment"
+                :title="'查看评论'"
+                @click="openComments">
+                <span class="rail-icon">💬</span>
+                <span class="rail-count">{{ formatCount(socialState.comment_count) }}</span>
+              </button>
+              <button
+                class="rail-btn rail-collect"
+                :class="{ active: socialState.collected }"
+                :disabled="socialBusy"
+                :title="account.logged_in ? (socialState.collected ? '取消收藏' : '收藏') : '登录后收藏'"
+                @click="toggleCollect">
+                <span class="rail-icon">{{ socialState.collected ? '⭐' : '☆' }}</span>
+                <span class="rail-count">{{ formatCount(socialState.collect_count) }}</span>
+              </button>
+            </div>
           </div>
 
           <!-- 播放器控制条 -->
@@ -598,6 +627,43 @@
             </div>
           </div>
         </aside>
+
+        <!-- 评论抽屉 -->
+        <transition name="comments-slide">
+          <div v-if="showComments" class="comments-drawer" @click.self="closeComments">
+            <div class="comments-panel" role="dialog" aria-modal="true" aria-label="本集评论">
+              <div class="comments-header">
+                <h3 class="comments-title">评论 <span class="comments-total">{{ formatCount(comments.total) }}</span></h3>
+                <button class="comments-close" title="关闭" @click="closeComments">✕</button>
+              </div>
+              <div class="comments-body">
+                <div v-if="comments.loading && !comments.items.length" class="comments-state">加载中…</div>
+                <div v-else-if="comments.notice && !comments.items.length" class="comments-state">{{ comments.notice }}</div>
+                <template v-else>
+                  <div v-for="item in comments.items" :key="item.comment_id" class="comment-item">
+                    <img class="comment-avatar" :src="item.user_avatar" :alt="item.user_name" referrerpolicy="no-referrer" @error="onAvatarError" />
+                    <div class="comment-main">
+                      <div class="comment-user">{{ item.user_name }}</div>
+                      <div class="comment-text">{{ item.text }}</div>
+                      <div class="comment-meta">
+                        <span class="comment-time">{{ formatRecordTime(item.created_at) }}</span>
+                        <span v-if="item.digg_count" class="comment-digg">👍 {{ formatCount(item.digg_count) }}</span>
+                        <span v-if="item.reply_count" class="comment-reply">💬 {{ formatCount(item.reply_count) }}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    v-if="comments.has_more"
+                    class="comments-more"
+                    :disabled="comments.loading"
+                    @click="loadMoreComments">
+                    {{ comments.loading ? '加载中…' : '加载更多评论' }}
+                  </button>
+                </template>
+              </div>
+            </div>
+          </div>
+        </transition>
       </div>
     </main>
 

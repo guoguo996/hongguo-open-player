@@ -480,6 +480,156 @@ const app = createApp({
     const danmakuText = ref('');
     const sendingDanmaku = ref(false);
 
+    // ================= 播放右侧互动栏：点赞 / 评论 / 收藏 =================
+    const socialState = ref({ like_count: 0, comment_count: 0, collect_count: 0, liked: false, collected: false });
+    const socialBusy = ref(false);
+    const showComments = ref(false);
+    const comments = ref({ loading: false, items: [], total: 0, has_more: false, cursor: '', notice: '', key: '' });
+    let commentsRequest = 0;
+    let socialKey = '';
+
+    function formatCount(value) {
+      const num = Number(value) || 0;
+      if (num >= 100000000) return (num / 100000000).toFixed(1).replace(/\.0$/, '') + '亿';
+      if (num >= 10000) return (num / 10000).toFixed(1).replace(/\.0$/, '') + '万';
+      return String(num);
+    }
+
+    function currentVid() {
+      return activeEpisodes.value.find(e => e.vid_index === activeEpisodeIndex.value)?.vid || '';
+    }
+
+    // 从账号云端记录推断当前剧是否已点赞/收藏（记录未加载时保守置 false）。
+    function deriveSocialFlags() {
+      const seriesId = String(activeSeries.value?.series_id || '');
+      if (!account.value.logged_in || !seriesId) return { liked: false, collected: false };
+      const inList = list => (list || []).some(item => String(item.series_id || item.seriesId || '') === seriesId);
+      return {
+        liked: inList(accountRecords.value.likes?.items),
+        collected: inList(accountRecords.value.favorites?.items),
+      };
+    }
+
+    async function loadSocialState(force = false) {
+      const seriesId = activeSeries.value?.series_id;
+      const vid = currentVid();
+      const key = `${seriesId}:${vid}`;
+      if (!seriesId || !vid || (!force && key === socialKey)) return;
+      socialKey = key;
+      const info = activeSeries.value?.social_info || {};
+      const flags = deriveSocialFlags();
+      socialState.value = {
+        like_count: Number(info.like_count) || 0,
+        collect_count: Number(info.favorite_count) || 0,
+        comment_count: socialState.value.comment_count || 0,
+        liked: flags.liked,
+        collected: flags.collected,
+      };
+      // 评论总数：拉首页评论顺带预热抽屉数据。
+      const request = ++commentsRequest;
+      comments.value = { loading: true, items: [], total: 0, has_more: false, cursor: '', notice: '', key };
+      try {
+        const data = await fetch(`/api/video-comments/${encodeURIComponent(seriesId)}/${encodeURIComponent(vid)}`).then(r => r.json());
+        if (request !== commentsRequest) return;
+        comments.value = {
+          loading: false,
+          items: Array.isArray(data.items) ? data.items : [],
+          total: Number(data.total) || 0,
+          has_more: Boolean(data.has_more),
+          cursor: typeof data.cursor === 'string' ? data.cursor : '',
+          notice: data.notice || (data.success ? '' : '评论加载失败'),
+          key,
+        };
+        socialState.value.comment_count = comments.value.total;
+      } catch (_) {
+        if (request === commentsRequest) {
+          comments.value = { loading: false, items: [], total: 0, has_more: false, cursor: '', notice: '评论加载失败', key };
+        }
+      }
+    }
+
+    function openComments() {
+      showComments.value = true;
+      const key = `${activeSeries.value?.series_id}:${currentVid()}`;
+      if (comments.value.key !== key || (!comments.value.items.length && !comments.value.notice)) loadSocialState(true);
+    }
+
+    function closeComments() {
+      showComments.value = false;
+      keepPlayerFocus();
+    }
+
+    async function loadMoreComments() {
+      const seriesId = activeSeries.value?.series_id;
+      const vid = currentVid();
+      if (!seriesId || !vid || comments.value.loading || !comments.value.has_more) return;
+      const request = commentsRequest;
+      comments.value.loading = true;
+      try {
+        const data = await fetch(`/api/video-comments/${encodeURIComponent(seriesId)}/${encodeURIComponent(vid)}?cursor=${encodeURIComponent(comments.value.cursor)}`).then(r => r.json());
+        if (request !== commentsRequest) return;
+        const seen = new Set(comments.value.items.map(item => item.comment_id));
+        const fresh = (Array.isArray(data.items) ? data.items : []).filter(item => !seen.has(item.comment_id));
+        comments.value.items = comments.value.items.concat(fresh);
+        comments.value.has_more = Boolean(data.has_more);
+        comments.value.cursor = typeof data.cursor === 'string' ? data.cursor : '';
+        comments.value.total = Number(data.total) || comments.value.total;
+        comments.value.notice = data.notice || '';
+      } catch (_) {
+        if (request === commentsRequest) comments.value.notice = '加载更多评论失败';
+      } finally {
+        if (request === commentsRequest) comments.value.loading = false;
+      }
+    }
+
+    async function toggleLike() {
+      if (!account.value.logged_in) { notify('请先扫码登录红果账号'); showAccountModal.value = true; accountTab.value = 'login'; return; }
+      const seriesId = activeSeries.value?.series_id;
+      const vid = currentVid();
+      if (!seriesId || !vid || socialBusy.value) return;
+      socialBusy.value = true;
+      const next = !socialState.value.liked;
+      try {
+        const res = await fetch('/api/account/like', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ series_id: String(seriesId), vid: String(vid), action: next ? 'like' : 'unlike' }),
+        }).then(r => r.json());
+        if (res.error) throw new Error(res.error);
+        socialState.value.liked = next;
+        socialState.value.like_count = Math.max(0, socialState.value.like_count + (next ? 1 : -1));
+        if (accountRecords.value.likes?.loaded) loadAccountRecords('likes', true);
+      } catch (err) {
+        notify('点赞失败：' + (err.message || '请稍后重试'));
+      } finally {
+        socialBusy.value = false;
+        keepPlayerFocus();
+      }
+    }
+
+    async function toggleCollect() {
+      if (!account.value.logged_in) { notify('请先扫码登录红果账号'); showAccountModal.value = true; accountTab.value = 'login'; return; }
+      const seriesId = activeSeries.value?.series_id;
+      const vid = currentVid();
+      if (!seriesId || !vid || socialBusy.value) return;
+      socialBusy.value = true;
+      const next = !socialState.value.collected;
+      try {
+        const res = await fetch('/api/account/collect', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ series_id: String(seriesId), vid: String(vid), action: next ? 'collect' : 'uncollect' }),
+        }).then(r => r.json());
+        if (res.error) throw new Error(res.error);
+        socialState.value.collected = next;
+        socialState.value.collect_count = Math.max(0, socialState.value.collect_count + (next ? 1 : -1));
+        if (accountRecords.value.favorites?.loaded) loadAccountRecords('favorites', true);
+      } catch (err) {
+        notify('收藏失败：' + (err.message || '请稍后重试'));
+      } finally {
+        socialBusy.value = false;
+        keepPlayerFocus();
+      }
+    }
+
     async function loadAccountStatus() {
       try {
         const data = await fetch('/api/account/status').then(r => r.json());
@@ -1750,6 +1900,11 @@ const app = createApp({
       relatedWorks.value = [];
       relatedWorksNotice.value = '';
       sidebarTab.value = 'episodes';
+      showComments.value = false;
+      socialKey = '';
+      commentsRequest++;
+      socialState.value = { like_count: 0, comment_count: 0, collect_count: 0, liked: false, collected: false };
+      comments.value = { loading: false, items: [], total: 0, has_more: false, cursor: '', notice: '', key: '' };
       viewMode.value = 'catalog';
       if (navigator.mediaSession) { navigator.mediaSession.playbackState = 'none'; navigator.mediaSession.metadata = null; }
     }
@@ -1801,6 +1956,7 @@ const app = createApp({
         }
         activeEpisodeIndex.value = targetIndex;
         loadDanmaku();
+        loadSocialState(true);
         // 定位所属分组
         const matchedGroup = groups.find(g => targetIndex >= g.start && targetIndex <= g.end);
         if (matchedGroup) currentGroup.value = matchedGroup;
@@ -1839,6 +1995,7 @@ const app = createApp({
       isBuffering.value = true;
       activeEpisodeIndex.value = ep.vid_index;
       loadDanmaku();
+      loadSocialState(true);
       currentTime.value = 0;
 
 
@@ -2571,6 +2728,8 @@ const app = createApp({
       relatedWorks, relatedWorksLoading, relatedWorksNotice, loadRelatedWorks,
       reservedIds, pendingReserveId, reservingId, askReserve,
       danmakuText, sendingDanmaku, sendDanmaku,
+      socialState, socialBusy, showComments, comments,
+      formatCount, openComments, closeComments, loadMoreComments, toggleLike, toggleCollect,
       formatRecordTime, recordProgressText
     };
   }

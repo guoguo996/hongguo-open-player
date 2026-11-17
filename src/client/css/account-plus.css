@@ -330,3 +330,130 @@
 }
 .danmaku-send-btn:hover:not(:disabled) { background: var(--accent-hover); }
 .danmaku-send-btn:disabled { opacity: 0.45; cursor: default; }
+
+/* ================= 播放右侧互动操作栏（红果式） ================= */
+.player-action-rail {
+  position: absolute;
+  right: 14px;
+  bottom: 96px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  align-items: center;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+.rail-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  color: #fff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  transition: transform 0.15s ease;
+}
+.rail-btn:hover:not(:disabled) { transform: scale(1.12); }
+.rail-btn:disabled { cursor: default; opacity: 0.7; }
+.rail-icon {
+  font-size: 30px;
+  line-height: 1;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.55));
+}
+.rail-count {
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 20px;
+  text-align: center;
+}
+.rail-like.active .rail-icon { filter: drop-shadow(0 0 6px rgba(255, 51, 85, 0.7)); }
+.rail-collect.active .rail-icon { filter: drop-shadow(0 0 6px rgba(255, 196, 0, 0.7)); }
+.rail-collect.active .rail-count { color: #ffc400; }
+
+/* ================= 评论抽屉 ================= */
+.comments-drawer {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.35);
+}
+.comments-panel {
+  width: 380px;
+  max-width: 86vw;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card, #1b1e27);
+  border-left: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  box-shadow: -8px 0 28px rgba(0, 0, 0, 0.4);
+}
+.comments-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  flex: none;
+}
+.comments-title { margin: 0; font-size: 16px; color: var(--text-main); }
+.comments-total { color: var(--text-dim); font-size: 13px; font-weight: 400; margin-left: 4px; }
+.comments-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.comments-close:hover { color: var(--text-main); background: rgba(255, 255, 255, 0.06); }
+.comments-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.comments-state { color: var(--text-dim); font-size: 13px; text-align: center; padding: 32px 0; }
+.comment-item { display: flex; gap: 10px; }
+.comment-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+  background: rgba(255, 255, 255, 0.06);
+}
+.comment-main { flex: 1; min-width: 0; }
+.comment-user { font-size: 13px; color: var(--text-dim); margin-bottom: 3px; }
+.comment-text { font-size: 14px; color: var(--text-main); line-height: 1.5; word-break: break-word; }
+.comment-meta { display: flex; gap: 12px; margin-top: 5px; font-size: 12px; color: var(--text-dim); }
+.comments-more {
+  align-self: center;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+  color: var(--text-main);
+  border-radius: 999px;
+  padding: 8px 22px;
+  font-size: 13px;
+  cursor: pointer;
+  margin-top: 4px;
+}
+.comments-more:hover:not(:disabled) { background: rgba(255, 255, 255, 0.12); }
+.comments-more:disabled { opacity: 0.5; cursor: default; }
+.comments-slide-enter-active, .comments-slide-leave-active { transition: opacity 0.22s ease; }
+.comments-slide-enter-active .comments-panel, .comments-slide-leave-active .comments-panel { transition: transform 0.22s ease; }
+.comments-slide-enter-from, .comments-slide-leave-to { opacity: 0; }
+.comments-slide-enter-from .comments-panel, .comments-slide-leave-to .comments-panel { transform: translateX(100%); }
+
+@media (max-width: 720px) {
+  .player-action-rail { right: 8px; bottom: 84px; gap: 14px; }
+  .rail-icon { font-size: 26px; }
+  .comments-panel { width: 100vw; max-width: 100vw; }
+}
