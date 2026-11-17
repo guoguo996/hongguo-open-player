@@ -173,6 +173,10 @@
 
 .record-list { display: flex; flex-direction: column; gap: 8px; }
 .account-records-content { display: flex; flex-direction: column; gap: 12px; }
+/* 主页面云端记录：宽屏多列网格，区别于弹窗内的单列列表 */
+.cloud-records-main { width: 100%; max-width: 1400px; margin: 0 auto; }
+.cloud-records-main .record-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; }
+.cloud-records-main .record-subtabs { align-self: flex-start; }
 .record-subtabs {
   display: flex;
   gap: 6px;

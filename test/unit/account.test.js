@@ -372,17 +372,17 @@ test('normalizeCover：HEIC/fqnovelpic 签名封面重建为可显示的 byteimg
   assert.equal(normalizeCover(null), '');
 });
 
-test('收藏记录：action_type=4，剧名取 video_detail.series_title，按收藏时间降序', async () => {
+test('收藏记录：action_type=1（真实收藏列表），剧名取 video_detail.series_title，按收藏时间降序', async () => {
   const dir = tmpDir();
   const service = loggedInService(dir, {
     '/reading/ugc/action/mget/v1/': (url) => {
-      assert.equal(url.searchParams.get('action_type'), '4');
+      assert.equal(url.searchParams.get('action_type'), '1');
       assert.equal(url.searchParams.get('object_type_list'), '6,15,10');
       return ok({
         code: 0,
         data: {
           mixed_data_list: [
-            { video_data: { series_id: '111222333', title: '分集宣传文案', episode_cnt: 10, user_digg_timestamp_ms: 1763000000000, video_detail: { series_title: '早收藏剧' } } },
+            { video_data: { series_id: '111222333', title: '分集宣传文案', episode_cnt: 10, user_collect_timestamp_ms: 1763000000000, video_detail: { series_title: '早收藏剧' } } },
             { video_data: { series_id: '444555666', episode_cnt: 20, video_detail: { series_title: '晚收藏剧' } }, create_time: 1763100000 },
           ],
         },
@@ -396,6 +396,40 @@ test('收藏记录：action_type=4，剧名取 video_detail.series_title，按�
   assert.equal(result.items[0].favorited_at, 1763100000000);
   assert.equal(result.items[1].title, '早收藏剧');
   assert.equal(result.items[1].position_ms, 0);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('互动写入：set/v1/ 按 action_type 区分点赞/收藏，object_id 为分集 vid', async () => {
+  const dir = tmpDir();
+  const captured = [];
+  const service = loggedInService(dir, {
+    '/reading/ugc/action/set/v1/': (url, config) => {
+      captured.push({ method: config.method, body: config.data });
+      return ok({ code: 0, message: 'SUCCESS', data: { refresh: false } });
+    },
+  });
+  const like = await service.setSocialAction({ vid: '7706514645208534041', actionType: 3 });
+  assert.equal(like.success, true);
+  const collect = await service.setSocialAction({ vid: '7706514645208534041', actionType: 1 });
+  assert.equal(collect.success, true);
+  assert.equal(captured.length, 2);
+  assert.equal(captured[0].method, 'POST');
+  assert.deepEqual(JSON.parse(captured[0].body), { action_type: 3, object_type: 6, object_id: '7706514645208534041' });
+  assert.deepEqual(JSON.parse(captured[1].body), { action_type: 1, object_type: 6, object_id: '7706514645208534041' });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('互动写入：重复添加 101045 视为已生效；非法 vid/动作拒绝', async () => {
+  const dir = tmpDir();
+  const service = loggedInService(dir, {
+    '/reading/ugc/action/set/v1/': () => ok({ code: 101045, message: 'DIGG_DUPLICATE_ADD_ERROR' }),
+  });
+  const dup = await service.setSocialAction({ vid: '7706514645208534041', actionType: 3 });
+  assert.equal(dup.success, true);
+  const badVid = await service.setSocialAction({ vid: '0', actionType: 3 });
+  assert.equal(badVid.success, false);
+  const badType = await service.setSocialAction({ vid: '7706514645208534041', actionType: 9 });
+  assert.equal(badType.success, false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

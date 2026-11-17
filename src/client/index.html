@@ -26,6 +26,10 @@
           <button class="nav-item" :class="{ active: currentTab === 'ai-drama' && viewMode === 'catalog' }" @click="switchTab('ai-drama')">🤖 AI 短剧</button>
           <button class="nav-item" :class="{ active: currentTab === 'history' }" @click="switchTab('history')">🕒 观影历史</button>
           <button class="nav-item" :class="{ active: currentTab === 'favorites' }" @click="switchTab('favorites')">⭐ 我的收藏</button>
+          <button class="nav-item" :class="{ active: currentTab === 'cloud-history' }" @click="switchTab('cloud-history')">▶ 播放记录</button>
+          <button class="nav-item" :class="{ active: currentTab === 'cloud-likes' }" @click="switchTab('cloud-likes')">❤ 点赞记录</button>
+          <button class="nav-item" :class="{ active: currentTab === 'cloud-favorites' }" @click="switchTab('cloud-favorites')">★ 收藏记录</button>
+          <button class="nav-item" :class="{ active: currentTab === 'cloud-reserves' }" @click="switchTab('cloud-reserves')">📅 预约记录</button>
         </nav>
       </div>
 
@@ -117,7 +121,7 @@
     <!-- 主体内容区域 -->
     <main class="app-main" :inert="activeActor ? true : undefined" :aria-hidden="activeActor ? 'true' : undefined">
       <!-- 快捷搜索推荐标签 -->
-      <section v-if="viewMode === 'catalog' && currentTab !== 'history' && currentTab !== 'favorites' && currentTab !== 'actors'" class="chips-bar">
+      <section v-if="viewMode === 'catalog' && !isCloudTab && currentTab !== 'history' && currentTab !== 'favorites' && currentTab !== 'actors'" class="chips-bar">
         <span class="chips-label">热门搜索：</span>
         <button v-for="tag in hotTags" :key="tag" class="chip-item" @click="quickSearch(tag)">{{ tag }}</button>
       </section>
@@ -236,6 +240,70 @@
 
       <!-- 剧集卡片网格列表 -->
       <div v-if="viewMode === 'catalog' && currentTab !== 'actors'" class="catalog-container">
+        <!-- 云端记录标签（播放/点赞/收藏/预约）：复用账号记录列表 -->
+        <template v-if="isCloudTab">
+          <div v-if="!account.logged_in" class="empty-state">
+            <span class="empty-icon">🔐</span>
+            <h3>登录后查看云端记录</h3>
+            <p>扫码登录红果账号，即可同步播放、点赞、收藏与预约记录</p>
+            <button class="retry-btn" style="margin-top: 14px; padding: 8px 20px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.08); color: #fff; cursor: pointer;" @click="openAccountModal('login')">扫码登录</button>
+          </div>
+          <div v-else-if="accountRecords[cloudRecordKind].loading && !accountRecords[cloudRecordKind].items.length" class="drama-grid" aria-busy="true">
+            <div v-for="n in 8" :key="n" class="skeleton-card" aria-hidden="true">
+              <div class="skeleton-cover"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div>
+            </div>
+          </div>
+          <div v-else class="account-records-content cloud-records-main">
+            <div v-if="cloudRecordKind === 'reserves'" class="record-subtabs" role="tablist">
+              <button
+                v-for="st in reserveSubTabs"
+                :key="st.key"
+                role="tab"
+                :aria-selected="reserveSubTab === st.key"
+                :class="{ active: reserveSubTab === st.key }"
+                @click="switchReserveSubTab(st.key)"
+              >{{ st.label }}<span class="record-subtab-count">{{ st.count }}</span></button>
+            </div>
+            <div v-if="!visibleRecordItems.length" class="seasons-empty">
+              <p>{{ accountRecords[cloudRecordKind].notice || '该分类暂无记录' }}</p>
+              <button type="button" class="seasons-search-action-btn" @click="loadAccountRecords(cloudRecordKind)">重新加载</button>
+            </div>
+            <div v-else class="record-list">
+              <div
+                v-for="item in visibleRecordItems"
+                :key="item.series_id + ':' + (item.vid || item.reservation_id || '')"
+                class="record-item"
+                :class="{ 'record-upcoming': item.upcoming, 'record-clickable': !item.upcoming && item.series_id }"
+                :role="!item.upcoming && item.series_id ? 'button' : undefined"
+                :tabindex="!item.upcoming && item.series_id ? 0 : undefined"
+                :title="item.upcoming ? '待上线作品，上线后可在预约记录中查看' : '点击从云端进度继续播放'"
+                @click="!item.upcoming && item.series_id && playFromCloudRecord(item)"
+                @keydown.enter="!item.upcoming && item.series_id && playFromCloudRecord(item)"
+              >
+                <img :src="item.cover" class="record-cover" @error="onImageError" alt="" />
+                <div class="record-meta">
+                  <h4 class="record-title" :title="item.title">{{ item.title || '（未知剧名）' }}</h4>
+                  <div class="record-sub">
+                    <span v-if="cloudRecordKind === 'history' && item.episode_index">看到第 {{ item.episode_index }} 集<template v-if="item.episode_count"> / 共 {{ item.episode_count }} 集</template></span>
+                    <span v-if="cloudRecordKind === 'history' && recordProgressText(item)">{{ recordProgressText(item) }}</span>
+                    <span v-if="(cloudRecordKind === 'likes' || cloudRecordKind === 'favorites') && item.episode_count">共 {{ item.episode_count }} 集</span>
+                    <span v-if="cloudRecordKind === 'reserves' && item.upcoming" class="record-upcoming-tag">待上线</span>
+                    <span v-if="cloudRecordKind === 'reserves' && !item.upcoming && item.episode_count">共 {{ item.episode_count }} 集</span>
+                    <span v-if="cloudRecordKind === 'reserves' && item.upcoming && item.publish_at">预计 {{ formatRecordTime(item.publish_at) }} 上线</span>
+                    <span v-if="cloudRecordKind === 'reserves' && !item.upcoming && item.publish_at">{{ formatRecordTime(item.publish_at) }} 上线</span>
+                    <span v-if="cloudRecordKind === 'history' && item.watched_at">{{ formatRecordTime(item.watched_at) }}</span>
+                    <span v-if="cloudRecordKind === 'likes' && item.liked_at">{{ formatRecordTime(item.liked_at) }}</span>
+                    <span v-if="cloudRecordKind === 'favorites' && item.favorited_at">{{ formatRecordTime(item.favorited_at) }}</span>
+                  </div>
+                </div>
+                <span v-if="!item.upcoming && item.series_id" class="record-play-hint" aria-hidden="true">▶</span>
+              </div>
+            </div>
+            <p v-if="accountRecords[cloudRecordKind].notice && accountRecords[cloudRecordKind].items.length" class="record-notice">{{ accountRecords[cloudRecordKind].notice }}</p>
+          </div>
+        </template>
+
+        <template v-else>
         <!-- 加载中指示器 -->
         <div v-if="loadingCatalog" class="drama-grid" aria-label="正在加载短剧" aria-busy="true">
           <div v-for="n in 8" :key="n" class="skeleton-card" aria-hidden="true">
@@ -290,6 +358,7 @@
           <span class="page-indicator">第 {{ currentPage }} 页</span>
           <button :disabled="loadingCatalog || !hasMore" class="page-btn" @click="changePage(1)">下一页</button>
         </div>
+        </template>
       </div>
 
       <!-- 沉浸式剧场/播放器视图 -->
@@ -1010,15 +1079,11 @@
 
         <div class="account-tabs" role="tablist">
           <button role="tab" :aria-selected="accountTab === 'login'" :class="{ active: accountTab === 'login' }" @click="switchAccountTab('login')">{{ account.logged_in ? '账号' : '扫码登录' }}</button>
-          <button role="tab" :aria-selected="accountTab === 'history'" :class="{ active: accountTab === 'history' }" @click="switchAccountTab('history')">播放记录</button>
-          <button role="tab" :aria-selected="accountTab === 'likes'" :class="{ active: accountTab === 'likes' }" @click="switchAccountTab('likes')">点赞记录</button>
-          <button role="tab" :aria-selected="accountTab === 'favorites'" :class="{ active: accountTab === 'favorites' }" @click="switchAccountTab('favorites')">收藏记录</button>
-          <button role="tab" :aria-selected="accountTab === 'reserves'" :class="{ active: accountTab === 'reserves' }" @click="switchAccountTab('reserves')">预约记录</button>
         </div>
 
         <div class="account-modal-body">
           <!-- 登录 / 账号页 -->
-          <div v-if="accountTab === 'login'" class="account-login-pane">
+          <div class="account-login-pane">
             <template v-if="!account.logged_in">
               <div class="qr-box">
                 <img v-if="qr.qrcode && (qr.status === 'pending' || qr.status === 'scanned')" :src="qr.qrcode" alt="红果扫码登录二维码" class="qr-img" />
@@ -1051,63 +1116,7 @@
             </template>
           </div>
 
-          <!-- 云端记录页 -->
-          <div v-else class="account-records-pane">
-            <div v-if="accountRecords[accountTab].loading" class="seasons-loading">
-              <div class="spinner"></div><span>正在加载云端记录…</span>
-            </div>
-            <div v-else-if="!accountRecords[accountTab].items.length" class="seasons-empty">
-              <p>{{ accountRecords[accountTab].notice || '暂无记录' }}</p>
-              <button type="button" class="seasons-search-action-btn" @click="loadAccountRecords(accountTab)">重新加载</button>
-            </div>
-            <div v-else class="account-records-content">
-              <div v-if="accountTab === 'reserves'" class="record-subtabs" role="tablist">
-                <button
-                  v-for="st in reserveSubTabs"
-                  :key="st.key"
-                  role="tab"
-                  :aria-selected="reserveSubTab === st.key"
-                  :class="{ active: reserveSubTab === st.key }"
-                  @click="switchReserveSubTab(st.key)"
-                >{{ st.label }}<span class="record-subtab-count">{{ st.count }}</span></button>
-              </div>
-              <div v-if="!visibleRecordItems.length" class="seasons-empty">
-                <p>该分类暂无记录</p>
-              </div>
-              <div v-else class="record-list">
-                <div
-                  v-for="item in visibleRecordItems"
-                  :key="item.series_id + ':' + (item.vid || item.reservation_id || '')"
-                  class="record-item"
-                  :class="{ 'record-upcoming': item.upcoming, 'record-clickable': !item.upcoming && item.series_id }"
-                  :role="!item.upcoming && item.series_id ? 'button' : undefined"
-                  :tabindex="!item.upcoming && item.series_id ? 0 : undefined"
-                  :title="item.upcoming ? '待上线作品，上线后可在预约记录中查看' : '点击从云端进度继续播放'"
-                  @click="!item.upcoming && item.series_id && playFromCloudRecord(item)"
-                  @keydown.enter="!item.upcoming && item.series_id && playFromCloudRecord(item)"
-                >
-                  <img :src="item.cover" class="record-cover" @error="onImageError" alt="" />
-                  <div class="record-meta">
-                    <h4 class="record-title" :title="item.title">{{ item.title || '（未知剧名）' }}</h4>
-                    <div class="record-sub">
-                      <span v-if="accountTab === 'history' && item.episode_index">看到第 {{ item.episode_index }} 集<template v-if="item.episode_count"> / 共 {{ item.episode_count }} 集</template></span>
-                      <span v-if="accountTab === 'history' && recordProgressText(item)">{{ recordProgressText(item) }}</span>
-                      <span v-if="(accountTab === 'likes' || accountTab === 'favorites') && item.episode_count">共 {{ item.episode_count }} 集</span>
-                      <span v-if="accountTab === 'reserves' && item.upcoming" class="record-upcoming-tag">待上线</span>
-                      <span v-if="accountTab === 'reserves' && !item.upcoming && item.episode_count">共 {{ item.episode_count }} 集</span>
-                      <span v-if="accountTab === 'reserves' && item.upcoming && item.publish_at">预计 {{ formatRecordTime(item.publish_at) }} 上线</span>
-                      <span v-if="accountTab === 'reserves' && !item.upcoming && item.publish_at">{{ formatRecordTime(item.publish_at) }} 上线</span>
-                      <span v-if="accountTab === 'history' && item.watched_at">{{ formatRecordTime(item.watched_at) }}</span>
-                      <span v-if="accountTab === 'likes' && item.liked_at">{{ formatRecordTime(item.liked_at) }}</span>
-                      <span v-if="accountTab === 'favorites' && item.favorited_at">{{ formatRecordTime(item.favorited_at) }}</span>
-                    </div>
-                  </div>
-                  <span v-if="!item.upcoming && item.series_id" class="record-play-hint" aria-hidden="true">▶</span>
-                </div>
-              </div>
-            </div>
-            <p v-if="accountRecords[accountTab].notice && accountRecords[accountTab].items.length" class="record-notice">{{ accountRecords[accountTab].notice }}</p>
-          </div>
+          <!-- 云端记录已移至主页面导航（播放/点赞/收藏/预约记录标签），弹窗仅保留登录/账号页 -->
         </div>
       </div>
     </div>

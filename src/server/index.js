@@ -247,6 +247,34 @@ app.post('/api/account/reserve', async (req, res) => {
   } catch (err) { sendApiError(res, err); }
 });
 
+// 写操作：点赞/取消点赞（ugc set action_type 3/4），需登录，仅由用户 UI 主动触发。
+app.post('/api/account/like', async (req, res) => {
+  const vid = req.body?.vid;
+  const action = req.body?.action;
+  if (!validSeriesId(vid)) return res.status(400).json({ error: '视频编号无效' });
+  if (!['like', 'unlike'].includes(action)) return res.status(400).json({ error: '点赞动作无效' });
+  try {
+    logger.info('Account', `用户触发点赞: vid=${vid.trim()} action=${action}`);
+    const result = await accountService().setSocialAction({ vid: vid.trim(), actionType: action === 'like' ? 3 : 4 });
+    res.set('Cache-Control', 'no-store');
+    res.json(result);
+  } catch (err) { sendApiError(res, err); }
+});
+
+// 写操作：收藏/取消收藏（ugc set action_type 1/2），需登录，仅由用户 UI 主动触发。
+app.post('/api/account/collect', async (req, res) => {
+  const vid = req.body?.vid;
+  const action = req.body?.action;
+  if (!validSeriesId(vid)) return res.status(400).json({ error: '视频编号无效' });
+  if (!['collect', 'uncollect'].includes(action)) return res.status(400).json({ error: '收藏动作无效' });
+  try {
+    logger.info('Account', `用户触发收藏: vid=${vid.trim()} action=${action}`);
+    const result = await accountService().setSocialAction({ vid: vid.trim(), actionType: action === 'collect' ? 1 : 2 });
+    res.set('Cache-Control', 'no-store');
+    res.json(result);
+  } catch (err) { sendApiError(res, err); }
+});
+
 // 相关作品（含待上线的下一季候选），匿名可读。
 app.get('/api/series/:seriesId/related', async (req, res) => {
   const { seriesId } = req.params;

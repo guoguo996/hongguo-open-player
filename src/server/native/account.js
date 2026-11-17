@@ -527,18 +527,18 @@ function createAccountService(options = {}) {
     }
   }
 
-  // 收藏记录：与点赞同端点，action_type=4（collect）。剧名取 video_detail.series_title。
+  // 收藏记录：mget action_type=1/2 才是收藏列表（3/4 为点赞列表）。剧名取 video_detail.series_title。
   async function favorites() {
     if (!loggedIn()) return needLogin();
     try {
-      const payload = await apiRequest('/reading/ugc/action/mget/v1/', { action_type: '4', object_type_list: '6,15,10', count: '50', offset: '0' });
+      const payload = await apiRequest('/reading/ugc/action/mget/v1/', { action_type: '1', object_type_list: '6,15,10', count: '50', offset: '0' });
       const rows = Array.isArray(payload?.data?.mixed_data_list) ? payload.data.mixed_data_list : [];
       const items = [];
       for (const row of rows) {
         const video = row?.video_data || row?.book_data;
         const mapped = mapProgressRow(video);
         if (!mapped) continue;
-        mapped.favorited_at = toMs(video?.user_digg_timestamp_ms ?? row.user_collect_timestamp_ms ?? row.create_time);
+        mapped.favorited_at = toMs(video?.user_collect_timestamp_ms ?? row.user_collect_timestamp_ms ?? row.create_time);
         mapped.position_ms = 0;
         mapped.duration_ms = 0;
         items.push(mapped);
@@ -677,9 +677,29 @@ function createAccountService(options = {}) {
     }
   }
 
+  // 点赞/收藏写入：共用 ugc/action/set/v1/。action_type 1/2=收藏加/消，3/4=点赞加/消；object_id 为分集 vid。
+  async function setSocialAction({ vid, actionType }) {
+    if (!loggedIn()) return { success: false, need_login: true, error: '请先扫码登录红果账号' };
+    const id = digits(vid);
+    const type = Number(actionType);
+    if (!/^\d{6,30}$/.test(id) || ![1, 2, 3, 4].includes(type)) return { success: false, error: '互动请求参数无效' };
+    try {
+      await apiRequest('/reading/ugc/action/set/v1/', {}, {
+        payload: JSON.stringify({ action_type: type, object_type: 6, object_id: id }),
+        gzip: false,
+      });
+      return { success: true, error: '' };
+    } catch (error) {
+      // 重复添加（101045）视为已生效，幂等处理不当作失败。
+      if (error?.businessCode === 101045) return { success: true, error: '', notice: '该操作已生效' };
+      logger.warn('Account', `互动写入失败(at=${type}): ${safeMessage(error)}`);
+      return { success: false, error: '操作失败，请稍后重试' };
+    }
+  }
+
   return {
     startLogin, pollLogin, logout, status, profile,
-    history, likes, favorites, reserves, related, reserve,
+    history, likes, favorites, reserves, related, reserve, setSocialAction,
     loggedIn,
     // 测试与复用需要的内部件
     _jar: jar, _apiRequest: apiRequest, _webJson: webJson,

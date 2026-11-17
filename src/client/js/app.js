@@ -724,7 +724,7 @@ const app = createApp({
       showAppMenu.value = false;
       showAccountModal.value = true;
       loadAccountStatus();
-      switchAccountTab(tab || (account.value.logged_in ? 'history' : 'login'));
+      switchAccountTab(tab || 'login');
       nextTick(() => document.querySelector('.account-modal')?.focus?.());
     }
 
@@ -793,11 +793,18 @@ const app = createApp({
       ];
     });
     const visibleRecordItems = computed(() => {
-      const items = accountRecords.value[accountTab.value]?.items || [];
-      if (accountTab.value !== 'reserves') return items;
+      const kind = cloudRecordKind.value;
+      const items = accountRecords.value[kind]?.items || [];
+      if (kind !== 'reserves') return items;
       return reserveSubTab.value === 'upcoming' ? items.filter(i => i.upcoming) : items.filter(i => !i.upcoming);
     });
     function switchReserveSubTab(key) { reserveSubTab.value = key; }
+
+    // 主页面云端记录标签：映射到账号记录类别，复用记录列表渲染（accountTab 同步设为该类别）。
+    const CLOUD_TAB_KIND = { 'cloud-history': 'history', 'cloud-likes': 'likes', 'cloud-favorites': 'favorites', 'cloud-reserves': 'reserves' };
+    const cloudRecordKind = computed(() => CLOUD_TAB_KIND[currentTab.value] || '');
+    const isCloudTab = computed(() => !!cloudRecordKind.value);
+    watch(() => account.value.logged_in, logged => { if (logged && cloudRecordKind.value) loadAccountRecords(cloudRecordKind.value); });
 
     async function playFromCloudRecord(item) {
       if (!item?.series_id) return;
@@ -1263,6 +1270,12 @@ const app = createApp({
       if (tab === 'actors') {
         actorPage.value = 1;
         loadActorRankings();
+      } else if (CLOUD_TAB_KIND[tab]) {
+        // 云端记录标签：不走目录加载，直接拉对应账号记录（未登录时主区域显示登录门槛）。
+        actorRankingRequestId++;
+        loadingActors.value = false;
+        const kind = CLOUD_TAB_KIND[tab];
+        if (account.value.logged_in) loadAccountRecords(kind);
       } else {
         // 切出剧星榜时立即使进行中的榜单请求失效，避免晚到数据污染
         actorRankingRequestId++;
@@ -1890,6 +1903,7 @@ const app = createApp({
     function leaveTheater() {
       theaterRequest++;
       saveProgressNow();
+      reportCloudProgress(true);
       if (videoEl.value && typeof videoEl.value.pause === 'function') videoEl.value.pause();
       resetPlayback();
       videoResolution.value = { width: 0, height: 0 };
@@ -2130,6 +2144,17 @@ const app = createApp({
         }).then(r => r.json());
         if (res.error) throw new Error(res.error);
         isFavorited.value = !!res.is_favorite;
+        // 本地收藏同步到红果账号（官方 App 收藏记录可见），与右侧⭐同一写端点。
+        if (account.value.logged_in) {
+          const vid = currentVid();
+          socialState.value.collected = !!res.is_favorite;
+          if (vid) {
+            fetch('/api/account/collect', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ series_id: activeSeries.value.series_id, vid, action: res.is_favorite ? 'collect' : 'uncollect' }),
+            }).catch(() => {});
+          }
+        }
       } catch (err) {
         console.error('收藏切换失败:', err);
         notify('收藏保存失败，请稍后重试');
@@ -2379,6 +2404,29 @@ const app = createApp({
       return set ? set.has(index) : false;
     }
 
+    // 播放进度同步上报红果账号（官方 App 播放记录可见）。节流 20s，离开剧场时强制。
+    let lastCloudProgressAt = 0;
+    async function reportCloudProgress(force = false) {
+      if (!account.value.logged_in) return;
+      if (!activeSeries.value || !progressReady || viewMode.value !== 'theater') return;
+      const now = Date.now();
+      if (!force && now - lastCloudProgressAt < 20000) return;
+      lastCloudProgressAt = now;
+      const curEp = activeEpisodes.value.find(e => e.vid_index === activeEpisodeIndex.value);
+      try {
+        await fetch('/api/account/progress', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            series_id: activeSeries.value.series_id,
+            vid: curEp?.vid || '',
+            episode_index: activeEpisodeIndex.value,
+            position_sec: currentTime.value,
+            duration_sec: duration.value,
+          }),
+        });
+      } catch (_) { /* 云端上报失败不影响本地进度 */ }
+    }
+
     function saveProgressNow() {
       if (!activeSeries.value || !progressReady || viewMode.value !== 'theater') return;
       const curEp = activeEpisodes.value.find(e => e.vid_index === activeEpisodeIndex.value);
@@ -2397,6 +2445,7 @@ const app = createApp({
           watched_indexes: [...(watchedMap.value.get(activeSeries.value.series_id) || [])]
         })
       }).then(response => { if (!response.ok) throw new Error('保存失败'); }).catch(() => notify('观看进度保存失败，请检查数据目录是否可写'));
+      reportCloudProgress();
     }
 
     function onImageError(e) {
@@ -2723,6 +2772,7 @@ const app = createApp({
       isResettingDevice,
       account, showAccountModal, accountTab, accountRecords, qr,
       reserveSubTab, reserveSubTabs, visibleRecordItems, switchReserveSubTab,
+      cloudRecordKind, isCloudTab,
       openAccountModal, closeAccountModal, onAccountModalKeydown, switchAccountTab,
       startQrLogin, logoutAccount, loadAccountRecords, playFromCloudRecord,
       relatedWorks, relatedWorksLoading, relatedWorksNotice, loadRelatedWorks,
