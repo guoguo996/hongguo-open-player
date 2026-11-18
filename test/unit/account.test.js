@@ -397,23 +397,51 @@ test('收藏记录：视频书架 bookshelf/video/info（App 真实收藏），�
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test('互动写入：set/v1/ 按 action_type 区分点赞/收藏，object_id 为分集 vid', async () => {
+test('互动写入：点赞走 ugc set/v1/，收藏走 bookshelf/video/update/v1/（剧集级 book_id + 回读确认）', async () => {
   const dir = tmpDir();
   const captured = [];
+  let shelfHas = false;
   const service = loggedInService(dir, {
     '/reading/ugc/action/set/v1/': (url, config) => {
-      captured.push({ method: config.method, body: config.data });
+      captured.push({ path: '/reading/ugc/action/set/v1/', method: config.method, body: config.data });
       return ok({ code: 0, message: 'SUCCESS', data: { refresh: false } });
     },
+    '/reading/bookapi/bookshelf/video/update/v1/': (url, config) => {
+      captured.push({ path: '/reading/bookapi/bookshelf/video/update/v1/', method: config.method, body: config.data });
+      shelfHas = JSON.parse(config.data).update_bookshelf_video_list[0].video_shelf_operate_type === 0;
+      return ok({ code: 0 });
+    },
+    '/reading/bookapi/bookshelf/video/info/v1/': () => ok({
+      code: 0,
+      data: { video_shelf_info: shelfHas ? [{ series_id: '7705722548046023742', series_title: '收藏剧', collect_time: 1763000000 }] : [] },
+    }),
   });
   const like = await service.setSocialAction({ vid: '7706514645208534041', actionType: 3 });
   assert.equal(like.success, true);
-  const collect = await service.setSocialAction({ vid: '7706514645208534041', actionType: 1 });
+  const collect = await service.setSocialAction({ seriesId: '7705722548046023742', actionType: 1 });
   assert.equal(collect.success, true);
+  assert.equal(collect.confirmed, true);
   assert.equal(captured.length, 2);
   assert.equal(captured[0].method, 'POST');
   assert.deepEqual(JSON.parse(captured[0].body), { action_type: 3, object_type: 6, object_id: '7706514645208534041' });
-  assert.deepEqual(JSON.parse(captured[1].body), { action_type: 1, object_type: 6, object_id: '7706514645208534041' });
+  assert.equal(captured[1].path, '/reading/bookapi/bookshelf/video/update/v1/');
+  const addBody = JSON.parse(captured[1].body);
+  assert.equal(addBody.is_cancelled, false);
+  assert.equal(addBody.update_bookshelf_video_list[0].book_id, '7705722548046023742');
+  assert.equal(addBody.update_bookshelf_video_list[0].book_type, 2);
+  assert.equal(addBody.update_bookshelf_video_list[0].video_shelf_operate_type, 0);
+  assert.ok(addBody.update_bookshelf_video_list[0].modify_time > 0);
+  assert.ok(addBody.shark_extra);
+  assert.ok(!('group_name' in addBody.update_bookshelf_video_list[0]));
+  const uncollect = await service.setSocialAction({ seriesId: '7705722548046023742', actionType: 2 });
+  assert.equal(uncollect.success, true);
+  assert.equal(uncollect.confirmed, true);
+  const rmBody = JSON.parse(captured[2].body);
+  assert.equal(rmBody.update_bookshelf_video_list[0].video_shelf_operate_type, 1);
+  assert.equal(rmBody.update_bookshelf_video_list[0].group_name, '');
+  assert.ok(!rmBody.shark_extra);
+  const noSeries = await service.setSocialAction({ vid: '7706514645208534041', actionType: 1 });
+  assert.equal(noSeries.success, false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

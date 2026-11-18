@@ -597,16 +597,24 @@ function createAccountService(options = {}) {
     try {
       const items = [];
       for (const isOnline of ['true', 'false']) {
-        const payload = await apiRequest('/reading/user/subscribe/list/v0/', {
-          offset: '0', limit: '20', is_online: isOnline, tab_type: '13', subscribe_order_type: '0',
-          swipe_type: '0', need_calendar_schema: 'false', subscribe_offset: '0',
-        });
-        const rows = payload?.data?.subscribe_items;
-        // null 表示该类别为空，不是错误
-        if (!Array.isArray(rows)) continue;
-        for (const row of rows) {
-          const mapped = mapSubscribeItem(row, isOnline === 'false');
-          if (mapped && (mapped.series_id || mapped.title)) items.push(mapped);
+        // 上游分页契约（实测 2026-11-18）：has_more=true 时以 next_offset 续拉，
+        // 每页 limit=20；2000 条封顶防异常死循环
+        let offset = 0;
+        for (let page = 0; page < 100; page++) {
+          const payload = await apiRequest('/reading/user/subscribe/list/v0/', {
+            offset: String(offset), limit: '20', is_online: isOnline, tab_type: '13', subscribe_order_type: '0',
+            swipe_type: '0', need_calendar_schema: 'false', subscribe_offset: '0',
+          });
+          const data = payload?.data || {};
+          const rows = data.subscribe_items;
+          // null 表示该类别为空，不是错误
+          if (!Array.isArray(rows)) break;
+          for (const row of rows) {
+            const mapped = mapSubscribeItem(row, isOnline === 'false');
+            if (mapped && (mapped.series_id || mapped.title)) items.push(mapped);
+          }
+          if (!data.has_more || rows.length === 0) break;
+          offset = Number(data.next_offset) || (offset + rows.length);
         }
       }
       items.sort((a, b) => (a.upcoming === b.upcoming ? b.reserved_at - a.reserved_at : a.upcoming ? -1 : 1));
@@ -693,12 +701,48 @@ function createAccountService(options = {}) {
     }
   }
 
-  // 点赞/收藏写入：共用 ugc/action/set/v1/。action_type 1/2=收藏加/消，3/4=点赞加/消；object_id 为分集 vid。
-  async function setSocialAction({ vid, actionType }) {
+  // 点赞写入：ugc/action/set/v1/（action_type 3/4，object_id 为分集 vid），与 App「点赞」mget 数据源一致。
+  // 收藏写入：App「我的收藏」是视频书架，必须走 bookshelf/video/update/v1/（剧集级 book_id）；
+  // 写 ugc action 1/2 只进互动流水、不进 App 书架。协议证据：N3urda/hongguoTV
+  // CloudAccount.kt setFavorite / CloudFavoriteActionsTest（shark_extra 仅加、group_name 仅消）。
+  async function setSocialAction({ vid, seriesId, actionType }) {
     if (!loggedIn()) return { success: false, need_login: true, error: '请先扫码登录红果账号' };
-    const id = digits(vid);
     const type = Number(actionType);
-    if (!/^\d{6,30}$/.test(id) || ![1, 2, 3, 4].includes(type)) return { success: false, error: '互动请求参数无效' };
+    if (![1, 2, 3, 4].includes(type)) return { success: false, error: '互动请求参数无效' };
+    if (type === 1 || type === 2) {
+      const bookId = digits(seriesId);
+      if (!/^\d{6,30}$/.test(bookId)) return { success: false, error: '互动请求参数无效' };
+      const add = type === 1;
+      const entry = { book_id: bookId, book_type: 2, modify_time: Date.now(), video_shelf_operate_type: add ? 0 : 1 };
+      if (!add) entry.group_name = '';
+      const body = { is_cancelled: false, update_bookshelf_video_list: [entry] };
+      if (add) {
+        body.shark_extra = {
+          enter_from: 'MainFragmentActivity', previous_page: '', page_list: 'MainFragmentActivity',
+          is_active_behavior: 'true', inactive_type: '0',
+        };
+      }
+      try {
+        await apiRequest('/reading/bookapi/bookshelf/video/update/v1/', {}, { payload: JSON.stringify(body), gzip: false });
+        // code=0 只是回执，回读书架确认才算成功（与预约同一纪律）。
+        let confirmed = false;
+        try {
+          const list = await favorites();
+          confirmed = Boolean(list.success && list.items.some(item => item.series_id === bookId)) === add;
+        } catch (_) { /* 回读失败不影响提交回执 */ }
+        logger.info('Account', `收藏写入: series_id=${bookId}, add=${add}, confirmed=${confirmed}`);
+        return {
+          success: true, confirmed, series_id: bookId, error: '',
+          notice: confirmed ? '' : '操作已提交，但书架暂未确认，请稍后在收藏记录中查看',
+        };
+      } catch (error) {
+        if (error?.businessCode === 101045) return { success: true, error: '', notice: '该操作已生效' };
+        logger.warn('Account', `收藏写入失败(at=${type}): ${safeMessage(error)}`);
+        return { success: false, error: '操作失败，请稍后重试' };
+      }
+    }
+    const id = digits(vid);
+    if (!/^\d{6,30}$/.test(id)) return { success: false, error: '互动请求参数无效' };
     try {
       await apiRequest('/reading/ugc/action/set/v1/', {}, {
         payload: JSON.stringify({ action_type: type, object_type: 6, object_id: id }),
