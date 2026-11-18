@@ -4,9 +4,9 @@ const { cleanTitle, appCover } = require('./hongguo-app-search');
 const SITE = 'https://hongguoduanju.com';
 const CATEGORY_API = '/reading/distribution/category/landpage/v/';
 const RANK_API = '/reading/bookapi/bookmall/cell/change/v';
-const CATEGORIES = { 'real-drama': ['default', 'short_play'], 'comic-drama': ['comic_series', 'comic_series'], 'ai-drama': ['ai_series', 'ai_series'] };
+const CATEGORIES = { 'real-drama': ['default', 'short_play'], 'comic-drama': ['comic_series', 'comic_series'] };
 const RANKS = { 'hot-drama': ['all', 'ranklist_hot_play_sc'], 'hot-real-drama': ['human', 'human_hot_play'],
-  'hot-comic-drama': ['comic_series_rank', 'comic_series_hot_play'], 'hot-ai-drama': ['ai_playlet', 'ai_playlet_hot_play'] };
+  'hot-comic-drama': ['comic_series_rank', 'comic_series_hot_play'] };
 const TIMEOUT_MS = 10000, CACHE_MS = 120000, MAX_SESSIONS = 32, MAX_PAGES = 8;
 const sessions = new Map();
 const appError = (message, code = 'APP_SCHEMA') => Object.assign(new Error(message), { code });
@@ -161,4 +161,4 @@ async function browseList(options = {}) {
   return promise;
 }
 
-module.exports = { browseList, catalogCover };
+module.exports = { browseList, catalogCover, parseVideoCards: cards };

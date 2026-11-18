@@ -3,6 +3,7 @@ const hg = require('../native/hongguo');
 const hgSearch = require('../native/hongguo-search');
 const hgAppSearch = require('../native/hongguo-app-search');
 const hgCatalog = require('../native/hongguo-app-catalog');
+const hgRecommend = require('../native/hongguo-recommend');
 const appSource = require('../native/app-source');
 const logger = require('./logger');
 
@@ -98,6 +99,13 @@ class DramaService {
     }
 
     return { results: [], page, total: 0, hasMore: false };
+  }
+
+  /**
+   * 首页推荐：每次返回一部未看过的推荐剧（App 首页单列推荐流）
+   */
+  async recommendNext() {
+    return hgRecommend.nextRecommend();
   }
 
   /**

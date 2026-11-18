@@ -36,6 +36,48 @@ test('late catalog responses cannot replace the active tab; search pagination ke
   requests[3].resolve(response({ results: [], hasMore: false }));
 });
 
+test('recommend auto-plays in theater; wheel switches to next recommendation', async () => {
+  const requests = [];
+  let n = 0;
+  const tick = () => new Promise(resolve => setImmediate(resolve));
+  const state = client(async url => {
+    requests.push(url);
+    if (url === '/api/recommend/next') return response({ success: true, item: { series_id: String(++n), series_title: '剧' + n } });
+    if (url.startsWith('/api/series/')) return response({ series_id: url.split('/').pop(), total: 1, episodes: [{ vid: 'v1', vid_index: 1 }] });
+    return response([]);
+  });
+  await state.loadRecommend();
+  assert.equal(state.recommendItem.value.series_id, '1');
+  assert.equal(state.viewMode.value, 'theater', 'recommend should directly enter playback');
+  assert.equal(state.activeSeries.value.series_id, '1');
+  // 剧场滚轮 = 换一部推荐并直接播放
+  state.handlePlayerWheel({ deltaY: 120 });
+  await tick(); await tick();
+  assert.equal(state.recommendItem.value.series_id, '2');
+  const count = requests.filter(u => u === '/api/recommend/next').length;
+  // 节流内的第二次滚动不再发请求
+  state.handlePlayerWheel({ deltaY: 120 });
+  await tick();
+  assert.equal(requests.filter(u => u === '/api/recommend/next').length, count);
+});
+
+test('switchTab recommend routes to the recommend endpoint and plays, not catalog', async () => {
+  const requests = [];
+  const state = client(async url => {
+    requests.push(url);
+    if (url === '/api/recommend/next') return response({ success: true, item: { series_id: '9', series_title: '剧' } });
+    if (url.startsWith('/api/series/')) return response({ series_id: '9', total: 1, episodes: [{ vid: 'v1', vid_index: 1 }] });
+    return response([]);
+  });
+  state.switchTab('recommend');
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(state.currentTab.value, 'recommend');
+  assert.ok(requests.includes('/api/recommend/next'));
+  assert.ok(!requests.some(u => u.startsWith('/api/catalog')));
+  assert.equal(state.viewMode.value, 'theater');
+});
+
 module.exports = { client, response };
 
 test('search from saved lists enters search mode and keeps paging independent of draft input', async () => {
@@ -473,6 +515,16 @@ test('index.html layout includes header hamburger menu button, dropdown menu, an
   assert.ok(html.includes('openAboutModal'), 'About modal item must exist');
   assert.ok(html.includes('class="shortcuts-modal"'), 'Shortcuts modal dialog must exist');
   assert.ok(html.includes('class="about-modal"'), 'About modal dialog must exist');
+});
+
+test('index.html has recommend nav and single-drama view, and no AI drama tab', () => {
+  const html = fs.readFileSync(require.resolve('../../src/client/index.html'), 'utf8');
+  assert.ok(html.includes("switchTab('recommend')"), 'Recommend nav button must exist');
+  assert.ok(html.includes('class="recommend-container"'), 'Recommend view container must exist');
+  assert.ok(html.includes('onRecommendWheel'), 'Recommend wheel handler must be bound');
+  assert.ok(html.includes('recommend-next-btn'), 'Recommend next button must exist');
+  assert.ok(!html.includes('ai-drama'), 'AI drama tab must be removed');
+  assert.ok(!html.includes('AI 短剧'), 'AI drama label must be removed');
 });
 
 test('app menu toggles and modals open and close correctly', async () => {

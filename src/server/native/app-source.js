@@ -273,7 +273,7 @@ function getActiveMetadataDevice() {
     return metadataDevice;
 }
 function signedMetadataRequest(apiPath, values = {}, payload = null) {
-    if (!['/reading/distribution/category/landpage/v/', '/reading/bookapi/bookmall/cell/change/v', '/reading/user/celebrity/homepage/v1/', '/reading/user/celebrity/works/v1/'].includes(apiPath)) {
+    if (!['/reading/distribution/category/landpage/v/', '/reading/bookapi/bookmall/cell/change/v', '/reading/bookapi/bookmall/cell/change/v1/', '/reading/bookapi/bookmall/tab/v1/', '/reading/user/celebrity/homepage/v1/', '/reading/user/celebrity/works/v1/'].includes(apiPath)) {
         throw new Error('不支持的 App 目录接口');
     }
     const targetDevice = getActiveMetadataDevice();
@@ -435,7 +435,8 @@ async function requestJson(url, options, deadline, signal) {
             response = await axios({
                 ...transportOptions, headers, url, timeout, signal, maxRedirects: 0,
                 responseType: 'text', transformResponse: [(data) => data],
-                maxContentLength: 2 * 1024 * 1024, maxBodyLength: 1024 * 1024,
+                // 推荐 feed 单批响应远大于账号接口（N3urda/hongguoTV 用 16 MiB 上限），允许调用方按需放宽。
+                maxContentLength: options.maxContentLength || 2 * 1024 * 1024, maxBodyLength: 1024 * 1024,
                 validateStatus: () => true,
             });
         } catch (error) {

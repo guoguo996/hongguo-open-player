@@ -19,11 +19,12 @@
           <span class="brand-name"><span class="brand-accent">红果</span><span class="brand-suffix">播放器 Plus</span></span>
         </div>
         <nav class="nav-tabs">
+          <button class="nav-item" :class="{ active: currentTab === 'recommend' }" @click="switchTab('recommend')">✨ 推荐</button>
           <button class="nav-item" :class="{ active: currentTab === 'hot-drama' && viewMode === 'catalog' }" @click="switchTab('hot-drama')">🔥 热门榜单</button>
           
           <button class="nav-item" :class="{ active: currentTab === 'real-drama' && viewMode === 'catalog' }" @click="switchTab('real-drama')">🎭 真人短剧</button>
           <button class="nav-item" :class="{ active: currentTab === 'comic-drama' && viewMode === 'catalog' }" @click="switchTab('comic-drama')">🎨 精品漫剧</button>
-          <button class="nav-item" :class="{ active: currentTab === 'ai-drama' && viewMode === 'catalog' }" @click="switchTab('ai-drama')">🤖 AI 短剧</button>
+          
           <button class="nav-item" :class="{ active: currentTab === 'history' }" @click="switchTab('history')">🕒 本地历史</button>
           <button class="nav-item" :class="{ active: currentTab === 'cloud-history' }" @click="switchTab('cloud-history')">▶ 红果记录</button>
           <button class="nav-item" :class="{ active: currentTab === 'cloud-likes' }" @click="switchTab('cloud-likes')">❤ 点赞记录</button>
@@ -134,13 +135,46 @@
     <!-- 主体内容区域 -->
     <main class="app-main">
       <!-- 快捷搜索推荐标签 -->
-      <section v-if="viewMode === 'catalog' && !isCloudTab && currentTab !== 'history' && currentTab !== 'favorites'" class="chips-bar">
+      <section v-if="viewMode === 'catalog' && !isCloudTab && currentTab !== 'history' && currentTab !== 'favorites' && currentTab !== 'recommend'" class="chips-bar">
         <span class="chips-label">热门搜索：</span>
         <button v-for="tag in hotTags" :key="tag" class="chip-item" @click="quickSearch(tag)">{{ tag }}</button>
       </section>
 
+      <!-- 首页推荐：单剧卡片，点击「换一个」或滚动鼠标滚轮推荐另一部 -->
+      <div v-if="viewMode === 'catalog' && currentTab === 'recommend'" class="recommend-container" @wheel.prevent="onRecommendWheel">
+        <div v-if="loadingRecommend && !recommendItem" class="recommend-loading" aria-busy="true">
+          <div class="skeleton-card recommend-skeleton"><div class="skeleton-cover"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div></div>
+        </div>
+        <div v-else-if="recommendError && !recommendItem" class="empty-state error-state">
+          <span class="empty-icon">⚠️</span>
+          <h3>推荐加载失败</h3>
+          <p>{{ recommendError }}</p>
+          <button class="retry-btn" @click="loadRecommend" style="margin-top: 14px; padding: 8px 20px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.08); color: #fff; cursor: pointer;">重试</button>
+        </div>
+        <div v-else-if="recommendItem" class="recommend-card" :class="{ switching: loadingRecommend }">
+          <div class="recommend-cover-wrapper" @click="openTheater(recommendItem)" role="button" tabindex="0" @keydown.enter="openTheater(recommendItem)">
+            <img :src="recommendItem.cover" :alt="recommendItem.series_title" class="recommend-cover" @error="onImageError" />
+            <div class="cover-overlay"><span class="play-badge">▶ 立即播放</span></div>
+            <span class="episode-badge">{{ recommendItem.episode_count ? `全 ${recommendItem.episode_count} 集` : '短剧' }}</span>
+          </div>
+          <div class="recommend-info">
+            <h3 class="recommend-title" :title="recommendItem.series_title">{{ recommendItem.series_title }}</h3>
+            <div class="card-tags">
+              <span v-for="(t, i) in (recommendItem.tags || []).slice(0, 4)" :key="i" class="card-tag">{{ t }}</span>
+            </div>
+            <p v-if="recommendItem.description" class="recommend-desc">{{ recommendItem.description }}</p>
+            <div class="recommend-actions">
+              <button class="recommend-play-btn" @click="openTheater(recommendItem)">▶ 立即播放</button>
+              <button class="recommend-next-btn" :disabled="loadingRecommend" @click="loadRecommend">{{ loadingRecommend ? '加载中…' : '🔄 换一个' }}</button>
+            </div>
+            <p class="recommend-hint">点击「换一个」或滚动鼠标滚轮，推荐另一部短剧</p>
+            <p v-if="recommendError" class="recommend-error-tip">{{ recommendError }}</p>
+          </div>
+        </div>
+      </div>
+
       <!-- 剧集卡片网格列表 -->
-      <div v-if="viewMode === 'catalog'" class="catalog-container">
+      <div v-if="viewMode === 'catalog' && currentTab !== 'recommend'" class="catalog-container">
         <!-- 云端记录标签（播放/点赞/收藏/预约）：复用账号记录列表 -->
         <template v-if="isCloudTab">
           <div v-if="!account.logged_in" class="empty-state">
@@ -150,7 +184,7 @@
             <button class="retry-btn" style="margin-top: 14px; padding: 8px 20px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.08); color: #fff; cursor: pointer;" @click="openAccountModal('login')">扫码登录</button>
           </div>
           <div v-else-if="accountRecords[cloudRecordKind].loading && !accountRecords[cloudRecordKind].items.length" class="drama-grid" aria-busy="true">
-            <div v-for="n in 8" :key="n" class="skeleton-card" aria-hidden="true">
+            <div v-for="n in 12" :key="n" class="skeleton-card" aria-hidden="true">
               <div class="skeleton-cover"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div>
             </div>
           </div>
@@ -207,7 +241,7 @@
         <template v-else>
         <!-- 加载中指示器 -->
         <div v-if="loadingCatalog" class="drama-grid" aria-label="正在加载短剧" aria-busy="true">
-          <div v-for="n in 8" :key="n" class="skeleton-card" aria-hidden="true">
+          <div v-for="n in 12" :key="n" class="skeleton-card" aria-hidden="true">
             <div class="skeleton-cover"></div><div class="skeleton-line"></div><div class="skeleton-line short"></div>
           </div>
         </div>
@@ -273,6 +307,7 @@
               <span class="playing-ep-badge">第 {{ activeEpisodeIndex }} 集 / 全 {{ activeSeries?.total || activeEpisodes.length }} 集</span>
             </div>
             <div class="player-actions">
+              <button v-if="currentTab === 'recommend'" class="recommend-switch-btn" :disabled="loadingRecommend" @click="loadRecommend" title="换一部推荐并直接播放（滚轮同效）">{{ loadingRecommend ? '加载中…' : '🔄 换一个' }}</button>
               <button class="fav-action-btn" :class="{ favorited: isFavorited }" @click="toggleFavCurrent" :title="isFavorited ? '取消收藏' : '收藏此剧'">
                 {{ isFavorited ? '❤️ 已收藏' : '🤍 收藏' }}
               </button>
@@ -296,7 +331,7 @@
           </div>
 
           <!-- 视频播放核心区 -->
-          <div class="video-stage">
+          <div class="video-stage" @wheel.prevent="handlePlayerWheel">
             <div v-if="osdMessage" class="player-osd" role="status">{{ osdMessage }}</div>
             <video 
               :key="currentStreamUrl"
@@ -938,6 +973,10 @@
             <div class="shortcut-item">
               <div class="keys"><kbd>↓</kbd> <span class="key-or">/</span> <kbd>PageDown</kbd></div>
               <div class="desc">切换至下一集</div>
+            </div>
+            <div class="shortcut-item">
+              <div class="keys"><span class="mouse-action">滚轮 ↑</span> <span class="key-or">/</span> <span class="mouse-action">滚轮 ↓</span></div>
+              <div class="desc">切换至上一集 / 下一集</div>
             </div>
             <div class="shortcut-item">
               <div class="keys"><kbd>←</kbd> <span class="key-or">/</span> <kbd>→</kbd></div>

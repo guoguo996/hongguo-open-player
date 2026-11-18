@@ -3571,3 +3571,114 @@ html.platform-win .app-header { padding-right: 160px; }
 .settings-btn.confirm:hover:not(:disabled) {
   opacity: 0.92;
 }
+
+/* ================= 首页推荐（单剧卡片，按钮/滚轮换一个） ================= */
+.recommend-container {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 24px 16px 40px;
+  min-height: 420px;
+}
+.recommend-loading { width: min(680px, 100%); }
+.recommend-skeleton { height: 360px; }
+.recommend-card {
+  display: flex;
+  gap: 24px;
+  width: min(720px, 100%);
+  padding: 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  transition: opacity 0.2s;
+}
+.recommend-card.switching { opacity: 0.55; }
+.recommend-cover-wrapper {
+  position: relative;
+  flex: none;
+  width: 220px;
+  aspect-ratio: 3 / 4;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  cursor: pointer;
+  background: #12151d;
+}
+.recommend-cover { width: 100%; height: 100%; object-fit: cover; display: block; }
+.recommend-cover-wrapper .cover-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.recommend-cover-wrapper:hover .cover-overlay,
+.recommend-cover-wrapper:focus-visible .cover-overlay { opacity: 1; }
+.recommend-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.recommend-title {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.3;
+  color: var(--text-main);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.recommend-desc {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.recommend-actions { display: flex; gap: 12px; margin-top: 4px; }
+.recommend-play-btn,
+.recommend-next-btn {
+  border: none;
+  border-radius: 999px;
+  padding: 10px 22px;
+  font-size: 15px;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+}
+.recommend-play-btn { background: var(--accent); color: #fff; font-weight: 600; }
+.recommend-play-btn:hover { background: var(--accent-hover, #ff5570); }
+.recommend-next-btn {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+}
+.recommend-next-btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.14); }
+.recommend-next-btn:disabled { opacity: 0.5; cursor: default; }
+.recommend-hint { margin: 0; color: var(--text-dim); font-size: 12px; }
+.recommend-error-tip { margin: 0; color: #ff8095; font-size: 13px; }
+/* 剧场头部「换一个」（推荐模式）：与收藏/侧栏按钮同排 */
+.recommend-switch-btn {
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-main);
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+}
+.recommend-switch-btn:hover:not(:disabled) { background: rgba(255, 51, 85, 0.2); border-color: var(--accent); }
+.recommend-switch-btn:disabled { opacity: 0.5; cursor: default; }
+@media (max-width: 640px) {
+  .recommend-card { flex-direction: column; }
+  .recommend-cover-wrapper { width: 100%; max-width: 280px; margin: 0 auto; }
+}

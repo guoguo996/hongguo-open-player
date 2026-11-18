@@ -10,7 +10,7 @@ const app = createApp({
   setup() {
     // 视图模式与导航状态
     const viewMode = ref('catalog'); // 'catalog' | 'theater'
-    const currentTab = ref('hot-drama'); // 'hot-drama' | 'real-drama' | 'comic-drama' | 'ai-drama' | 'history' | 'favorites' | 'search'
+    const currentTab = ref('recommend'); // 'recommend' | 'hot-drama' | 'real-drama' | 'comic-drama' | 'history' | 'favorites' | 'search'
     const searchKeyword = ref('');
     const searchHistory = ref([]);
     const showSearchHistory = ref(false);
@@ -26,6 +26,13 @@ const app = createApp({
     const hasMore = ref(false);
     let catalogRequest = 0;
     let submittedKeyword = '';
+
+    // 首页推荐（单剧卡片，按钮/滚轮换一个）
+    const recommendItem = ref(null);
+    const loadingRecommend = ref(false);
+    const recommendError = ref('');
+    let recommendRequest = 0;
+    let lastRecommendWheelAt = 0;
 
     // 剧场模式与播放器
     const videoEl = ref(null);
@@ -1393,6 +1400,40 @@ const app = createApp({
       }
     }
 
+    // 首页推荐：每次拉一部未看过的推荐剧；按钮与滚轮均触发换一个。
+    async function loadRecommend() {
+      const request = ++recommendRequest;
+      loadingRecommend.value = true;
+      recommendError.value = '';
+      try {
+        const response = await fetch('/api/recommend/next');
+        if (!response.ok) throw new Error(`加载失败 (${response.status})`);
+        const data = await response.json();
+        if (request !== recommendRequest) return;
+        if (!data || data.success === false || !data.item) throw new Error(data?.error || '推荐加载失败');
+        recommendItem.value = data.item;
+        // 和红果 App 首页推荐一致：拉到即直接进剧场自动播放，而非停在卡片。
+        if (currentTab.value === 'recommend') await openTheater(data.item);
+      } catch (err) {
+        if (request !== recommendRequest) return;
+        console.error('加载推荐失败:', err);
+        recommendError.value = err.message || '推荐加载失败，请重试';
+      } finally {
+        if (request === recommendRequest) loadingRecommend.value = false;
+      }
+    }
+
+    // 滚轮换一个：节流避免连续滚动触发过多请求；仅在推荐视图且非加载中时生效。
+    function onRecommendWheel(event) {
+      if (currentTab.value !== 'recommend' || viewMode.value !== 'catalog') return;
+      if (loadingRecommend.value) return;
+      const now = Date.now();
+      if (now - lastRecommendWheelAt < 600) return;
+      if (Math.abs(event.deltaY) < 10) return;
+      lastRecommendWheelAt = now;
+      loadRecommend();
+    }
+
     function loadSearchHistory() {
       const revision = searchHistoryRevision;
       searchHistoryQueue = searchHistoryQueue.then(async () => {
@@ -1454,6 +1495,8 @@ const app = createApp({
         // 云端记录标签：不走目录加载，直接拉对应账号记录（未登录时主区域显示登录门槛）。
         const kind = CLOUD_TAB_KIND[tab];
         if (account.value.logged_in) loadAccountRecords(kind);
+      } else if (tab === 'recommend') {
+        loadRecommend();
       } else {
         currentPage.value = 1;
         loadCatalog();
@@ -1466,7 +1509,7 @@ const app = createApp({
     }
 
     function goHome() {
-      switchTab('hot-drama');
+      switchTab('recommend');
     }
 
     let lastFocusedBeforeDramaModal = null;
@@ -1931,6 +1974,29 @@ const app = createApp({
         const group = episodeGroups.value.find(g => next.vid_index >= g.start && next.vid_index <= g.end);
         if (group) currentGroup.value = group;
         switchEpisode(next);
+      }
+    }
+
+    // 鼠标滚轮切集：上滚上一集 / 下滚下一集（仅在视频核心区生效，不干扰侧栏列表滚动）
+    let lastWheelSwitchAt = 0;
+    function handlePlayerWheel(e) {
+      if (viewMode.value !== 'theater') return;
+      const delta = e.deltaY;
+      if (Math.abs(delta) < 10) return;
+      const now = Date.now();
+      // 推荐模式：滚轮不切集，而是换一部推荐并直接播放（仿 App 上下滑切换）。
+      if (currentTab.value === 'recommend') {
+        if (now - lastWheelSwitchAt < 600 || loadingRecommend.value) return;
+        lastWheelSwitchAt = now;
+        loadRecommend();
+        return;
+      }
+      if (now - lastWheelSwitchAt < 400) return; // 触控板惯性滚动防连跳
+      const before = activeEpisodeIndex.value;
+      if (delta < 0) playPrevEpisode(); else playNextEpisode();
+      if (activeEpisodeIndex.value !== before) {
+        lastWheelSwitchAt = now;
+        showOSD(`第 ${activeEpisodeIndex.value} 集`);
       }
     }
 
@@ -2485,7 +2551,7 @@ const app = createApp({
       fetchDeviceInfo();
       loadPreferences();
       loadSearchHistory();
-      loadCatalog();
+      if (currentTab.value === 'recommend') loadRecommend(); else loadCatalog();
       loadAccountStatus();
       window.addEventListener('keydown', handleKeyDown);
       window.addEventListener('click', handleGlobalClick);
@@ -2542,6 +2608,9 @@ const app = createApp({
       currentPage,
       loadingCatalog,
       hasMore,
+      recommendItem,
+      loadingRecommend,
+      recommendError,
       videoEl,
       activeSeries,
       activeEpisodes,
@@ -2563,6 +2632,8 @@ const app = createApp({
       episodeGroups,
       currentGroupEpisodes,
       loadCatalog,
+      loadRecommend,
+      onRecommendWheel,
       handleSearch,
       quickSearch,
       switchTab,
@@ -2573,6 +2644,7 @@ const app = createApp({
       switchEpisode,
       playPrevEpisode,
       playNextEpisode,
+      handlePlayerWheel,
       togglePlay,
       seekByClick,
       changeSpeed,

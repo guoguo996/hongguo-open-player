@@ -352,6 +352,19 @@ app.get('/api/catalog', async (req, res) => {
 });
 
 /**
+ * 1.5 首页推荐：每次返回一部未看过的推荐剧（按钮/滚轮触发换一个）
+ */
+app.get('/api/recommend/next', async (req, res) => {
+  try {
+    const data = await dramaService.recommendNext();
+    res.set('Cache-Control', 'no-store');
+    res.json(data);
+  } catch (err) {
+    sendApiError(res, err);
+  }
+});
+
+/**
  * 2. 搜索短剧
  */
 app.get('/api/search', async (req, res) => {
