@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-const { app, BrowserWindow, Menu, shell, dialog } = require('electron');
+const { app, BrowserWindow, Menu, shell, dialog, globalShortcut, ipcMain } = require('electron');
 const path = require('path');
 
 // 必须在 app.whenReady 之前注入 Chromium 硬件解码与 macOS VideoToolbox HEVC (H.265) 解码开关
@@ -11,6 +11,75 @@ let mainWindow = null;
 let serverInstance = null;
 let serverStart = null;
 let windowCreation = null;
+
+// ================= 桌面设置：老板键（全局快捷键隐藏 / 显示窗口） =================
+let bossKeyConfig = null;
+let bossKeyRegistered = null;
+
+function desktopSettingsPath() {
+  const storageRoot = app.isPackaged ? app.getPath('userData') : path.join(__dirname, '../..');
+  return path.join(storageRoot, 'data', 'desktop-settings.json');
+}
+
+function loadDesktopSettings() {
+  try {
+    bossKeyConfig = JSON.parse(require('node:fs').readFileSync(desktopSettingsPath(), 'utf8')).bossKey || null;
+  } catch (_) {
+    bossKeyConfig = null;
+  }
+}
+
+function saveDesktopSettings() {
+  try {
+    const file = desktopSettingsPath();
+    require('node:fs').mkdirSync(path.dirname(file), { recursive: true });
+    require('node:fs').writeFileSync(file, JSON.stringify({ bossKey: bossKeyConfig }, null, 2));
+  } catch (_) {}
+}
+
+function toggleMainWindowVisibility() {
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : BrowserWindow.getAllWindows()[0];
+  if (!win) return;
+  if (win.isVisible() && !win.isMinimized()) {
+    win.hide();
+  } else {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  }
+}
+
+function applyBossKey(accelerator) {
+  if (bossKeyRegistered) {
+    globalShortcut.unregister(bossKeyRegistered);
+    bossKeyRegistered = null;
+  }
+  if (!accelerator) {
+    bossKeyConfig = null;
+    saveDesktopSettings();
+    return { success: true, bossKey: null };
+  }
+  try {
+    if (globalShortcut.register(accelerator, toggleMainWindowVisibility)) {
+      bossKeyRegistered = accelerator;
+      bossKeyConfig = accelerator;
+      saveDesktopSettings();
+      return { success: true, bossKey: accelerator };
+    }
+    return { success: false, error: '该快捷键可能已被其他程序占用，请换一个组合键' };
+  } catch (_) {
+    return { success: false, error: '快捷键格式无效，请重新录制' };
+  }
+}
+
+function setupDesktopSettingsIpc() {
+  ipcMain.handle('settings:get', () => ({ bossKey: bossKeyConfig }));
+  ipcMain.handle('settings:setBossKey', (_event, accelerator) => {
+    const acc = typeof accelerator === 'string' && accelerator.trim() ? accelerator.trim() : null;
+    return applyBossKey(acc);
+  });
+}
+
 function createWindow() {
   if (mainWindow) { mainWindow.focus(); return Promise.resolve(); }
   windowCreation ||= buildWindow().catch(error => {
@@ -50,14 +119,15 @@ async function buildWindow() {
     height: 840,
     minWidth: 960,
     minHeight: 640,
-    title: '红果播放器 Plus',
+    title: '红果播放器',
     backgroundColor: '#0f1015',
     autoHideMenuBar: !isMac, // Windows 下默认隐藏传统菜单栏，保持纯粹现代深色观影质感 (按 Alt 唤出)
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: true,
-      devTools: true
+      devTools: true,
+      preload: path.join(__dirname, 'preload.js')
     },
     show: false // 待内容准备完毕后再优雅显示，避免白屏
   };
@@ -304,6 +374,10 @@ if (!gotTheLock) {
       });
     }
     setupMenu();
+    // 桌面设置：加载并注册老板键，暴露 IPC
+    loadDesktopSettings();
+    setupDesktopSettingsIpc();
+    if (bossKeyConfig) applyBossKey(bossKeyConfig);
     createWindow().catch((err) => {
       console.error('Failed to create window:', err);
     });
@@ -320,6 +394,11 @@ if (!gotTheLock) {
     if (process.platform !== 'darwin') {
       app.quit();
     }
+  });
+
+  // 退出前释放全局快捷键
+  app.on('will-quit', () => {
+    try { globalShortcut.unregisterAll(); } catch (_) {}
   });
 
   let quitting = false;

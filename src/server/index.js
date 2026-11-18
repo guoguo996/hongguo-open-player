@@ -163,6 +163,40 @@ app.get('/api/video-comments/:seriesId/:vid', async (req, res) => {
   res.json(result);
 });
 
+// 评论写操作（点赞 / 回复）：仅由用户 UI 主动触发，需登录态（sessionid Cookie）。
+const videoCommentsService = () => require('./native/video-comments');
+const commentSessionCookie = () => {
+  const account = accountService();
+  return account.loggedIn() ? account._jar.cookieString() : '';
+};
+
+app.post('/api/video-comments/:seriesId/:vid/:commentId/like', async (req, res) => {
+  const { seriesId, vid, commentId } = req.params;
+  const liked = req.body?.liked;
+  if (!/^\d{6,30}$/.test(seriesId) || !/^\d{6,30}$/.test(vid) || !/^\d{6,30}$/.test(commentId)) {
+    return res.status(400).json({ error: '参数无效' });
+  }
+  if (typeof liked !== 'boolean') return res.status(400).json({ error: '点赞动作无效' });
+  const result = await videoCommentsService().likeVideoComment({
+    seriesId, vid, commentId, liked, cookie: commentSessionCookie(),
+  });
+  res.set('Cache-Control', 'no-store');
+  res.json(result);
+});
+
+// 评论回复列表（只读，匿名可调用）。
+app.get('/api/video-comments/:seriesId/:vid/:commentId/replies', async (req, res) => {
+  const { seriesId, vid, commentId } = req.params;
+  if (!/^\d{6,30}$/.test(seriesId) || !/^\d{6,30}$/.test(vid) || !/^\d{6,30}$/.test(commentId)) {
+    return res.status(400).json({ error: '参数无效' });
+  }
+  // 游标为上游原样透传的字符串偏移，只限制长度防滥用
+  const cursor = typeof req.query.cursor === 'string' && req.query.cursor.length <= 40 ? req.query.cursor : '';
+  const result = await videoCommentsService().fetchCommentReplies({ seriesId, vid, commentId, cursor });
+  res.set('Cache-Control', 'no-store');
+  res.json(result);
+});
+
 // ================= 账号：扫码登录 / 云端记录 / 预约 / 发弹幕 =================
 // 服务内部把所有失败转成中文 notice（success:false），路由只负责参数校验与兜底。
 const accountService = () => require('./native/account').getAccountService();
@@ -263,15 +297,15 @@ app.post('/api/account/like', async (req, res) => {
   } catch (err) { sendApiError(res, err); }
 });
 
-// 写操作：收藏/取消收藏（ugc set action_type 1/2），需登录，仅由用户 UI 主动触发。
+// 写操作：收藏/取消收藏（视频书架 bookshelf/video/update，App 收藏夹可见），需登录，仅由用户 UI 主动触发。
 app.post('/api/account/collect', async (req, res) => {
-  const vid = req.body?.vid;
+  const seriesId = req.body?.series_id;
   const action = req.body?.action;
-  if (!validSeriesId(vid)) return res.status(400).json({ error: '视频编号无效' });
+  if (!validSeriesId(seriesId)) return res.status(400).json({ error: '剧集编号无效' });
   if (!['collect', 'uncollect'].includes(action)) return res.status(400).json({ error: '收藏动作无效' });
   try {
-    logger.info('Account', `用户触发收藏: vid=${vid.trim()} action=${action}`);
-    const result = await accountService().setSocialAction({ vid: vid.trim(), actionType: action === 'collect' ? 1 : 2 });
+    logger.info('Account', `用户触发收藏: series_id=${seriesId.trim()} action=${action}`);
+    const result = await accountService().setSocialAction({ seriesId: seriesId.trim(), actionType: action === 'collect' ? 1 : 2 });
     res.set('Cache-Control', 'no-store');
     res.json(result);
   } catch (err) { sendApiError(res, err); }
@@ -297,27 +331,6 @@ app.get('/api/series/:seriesId/related', async (req, res) => {
   if (!validSeriesId(seriesId)) return res.status(400).json({ error: '剧集编号无效' });
   try {
     const result = await accountService().related(seriesId);
-    res.set('Cache-Control', 'no-store');
-    res.json(result);
-  } catch (err) { sendApiError(res, err); }
-});
-
-// 写操作：发弹幕（推断端点，未验证），需登录，仅由用户 UI 主动触发。
-app.post('/api/danmaku/publish', async (req, res) => {
-  const { series_id: seriesId, vid, text, time, duration } = req.body || {};
-  if (!validSeriesId(seriesId) || typeof vid !== 'string' || !/^\d{6,30}$/.test(vid.trim())) {
-    return res.status(400).json({ error: '剧集编号无效' });
-  }
-  if (typeof text !== 'string' || !text.trim() || text.length > 400) {
-    return res.status(400).json({ error: '弹幕内容无效' });
-  }
-  const timeSec = Number(time);
-  if (!Number.isFinite(timeSec) || timeSec < 0) return res.status(400).json({ error: '弹幕时间点无效' });
-  try {
-    const result = await require('./native/danmaku-publish').publishDanmaku({
-      seriesId: seriesId.trim(), vid: vid.trim(), text, timeSec,
-      durationSec: Number(duration) > 0 ? Number(duration) : undefined,
-    });
     res.set('Cache-Control', 'no-store');
     res.json(result);
   } catch (err) { sendApiError(res, err); }
@@ -453,46 +466,6 @@ app.post('/api/favorites/toggle', async (req, res) => {
   try {
     const isFav = await storeService.toggleFavorite(req.body);
     res.json({ success: true, is_favorite: isFav });
-  } catch (err) {
-    sendApiError(res, err);
-  }
-});
-
-/**
- * 8. 剧星榜（演员排行榜）
- */
-app.get('/api/actors/ranking', async (req, res) => {
-  try {
-    const { page, limit, gender } = req.query;
-    const data = await dramaService.getActorRankings({ page, limit, gender });
-    res.json(data);
-  } catch (err) {
-    sendApiError(res, err);
-  }
-});
-
-/**
- * 9. 演员个人主页详情
- */
-app.get('/api/actors/:actorId', async (req, res) => {
-  try {
-    const { actorId } = req.params;
-    const data = await dramaService.getActorDetail(actorId);
-    res.json(data);
-  } catch (err) {
-    sendApiError(res, err);
-  }
-});
-
-/**
- * 10. 演员参演短剧作品列表
- */
-app.get('/api/actors/:actorId/works', async (req, res) => {
-  try {
-    const { actorId } = req.params;
-    const { count, offset } = req.query;
-    const data = await dramaService.getActorWorks(actorId, { count, offset });
-    res.json(data);
   } catch (err) {
     sendApiError(res, err);
   }

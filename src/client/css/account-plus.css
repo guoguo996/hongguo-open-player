@@ -304,43 +304,6 @@
 .related-play-btn:hover { border-color: var(--accent); color: var(--accent); }
 .related-tip { margin: 8px 0 4px; color: var(--text-dim); font-size: 11px; }
 
-.danmaku-send-bar {
-  display: flex;
-  gap: 8px;
-  padding: 6px 4px 2px;
-}
-.danmaku-send-bar input {
-  flex: 1;
-  min-width: 0;
-  background: rgba(20, 23, 31, 0.85);
-  border: 1px solid var(--border-color);
-  border-radius: 999px;
-  color: var(--text-main);
-  padding: 7px 16px;
-  font-size: 13px;
-  outline: none;
-}
-.danmaku-send-bar input:focus { border-color: var(--accent); }
-.danmaku-send-bar input::placeholder { color: var(--text-dim); }
-.danmaku-send-btn {
-  border: none;
-  background: var(--accent);
-  color: #fff;
-  border-radius: 999px;
-  padding: 7px 20px;
-  font-size: 13px;
-  cursor: pointer;
-  flex: none;
-}
-.danmaku-send-btn:hover:not(:disabled) { background: var(--accent-hover); }
-.danmaku-send-btn:disabled { opacity: 0.45; cursor: default; }
-/* 内联发送框：嵌入底部控制排（弹幕设置左侧），紧凑高度对齐其余按钮 */
-.danmaku-send-inline { padding: 0; align-items: center; flex: none; }
-.danmaku-send-inline input { flex: none; width: 200px; padding: 6px 14px; font-size: 12px; }
-.danmaku-send-inline .danmaku-send-btn { padding: 6px 14px; font-size: 12px; }
-@media (max-width: 1100px) { .danmaku-send-inline input { width: 140px; } }
-@media (max-width: 820px) { .danmaku-send-inline input { width: 100px; } .danmaku-send-inline .danmaku-send-btn { padding: 6px 10px; } }
-
 /* ================= 播放右侧互动操作栏（红果式） ================= */
 .player-action-rail {
   position: absolute;
@@ -443,7 +406,63 @@
 .comment-main { flex: 1; min-width: 0; }
 .comment-user { font-size: 13px; color: var(--text-dim); margin-bottom: 3px; }
 .comment-text { font-size: 14px; color: var(--text-main); line-height: 1.5; word-break: break-word; }
-.comment-meta { display: flex; gap: 12px; margin-top: 5px; font-size: 12px; color: var(--text-dim); }
+.comment-meta { display: flex; gap: 12px; margin-top: 5px; font-size: 12px; color: var(--text-dim); align-items: center; }
+.comment-time { flex: none; }
+.comment-digg,
+.comment-reply {
+  background: none;
+  border: none;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+.comment-digg:hover:not(:disabled),
+.comment-reply:hover:not(:disabled) {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.06);
+}
+.comment-digg.active { color: #ff3355; font-weight: 600; }
+.comment-reply.active { color: #4da3ff; font-weight: 600; }
+.comment-digg:disabled { opacity: 0.5; cursor: default; }
+.comment-digg-static { color: var(--text-dim); }
+/* 评论的回复列表（只读展示） */
+.comment-replies {
+  margin-top: 8px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border, rgba(255, 255, 255, 0.1));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.comment-replies-state {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 2px 0;
+}
+.comment-replies-more {
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 0;
+  align-self: flex-start;
+}
+.comment-replies-more:hover:not(:disabled) { text-decoration: underline; }
+.comment-replies-more:disabled { opacity: 0.5; cursor: default; }
+.comment-reply-item {
+  display: flex;
+  gap: 10px;
+}
+.comment-avatar.reply {
+  width: 26px;
+  height: 26px;
+  flex: none;
+}
 .comments-more {
   align-self: center;
   background: rgba(255, 255, 255, 0.06);

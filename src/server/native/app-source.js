@@ -308,6 +308,7 @@ const ACCOUNT_API_ALLOWLIST = [
     '/reading/bookapi/read_progress/list/v1/',
     '/reading/bookapi/multi-detail/v1/',
     '/reading/bookapi/bookshelf/video/info/v1/',
+    '/reading/bookapi/bookshelf/video/update/v1/',
     '/reading/ugc/action/mget/v1/',
     '/reading/user/subscribe/list/v0/',
     '/reading/bookapi/search/uncover_subscribe/v1/',

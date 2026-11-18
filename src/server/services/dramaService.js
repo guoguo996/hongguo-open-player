@@ -3,7 +3,6 @@ const hg = require('../native/hongguo');
 const hgSearch = require('../native/hongguo-search');
 const hgAppSearch = require('../native/hongguo-app-search');
 const hgCatalog = require('../native/hongguo-app-catalog');
-const hgActor = require('../native/hongguo-actor');
 const appSource = require('../native/app-source');
 const logger = require('./logger');
 
@@ -180,26 +179,6 @@ class DramaService {
     };
   }
 
-  /**
-   * 获取剧星榜（演员排行榜）
-   */
-  async getActorRankings(options = {}) {
-    return hgActor.fetchActorRankings(options);
-  }
-
-  /**
-   * 获取演员主页详情
-   */
-  async getActorDetail(actorId) {
-    return hgActor.fetchActorDetail(actorId);
-  }
-
-  /**
-   * 获取演员参演短剧作品
-   */
-  async getActorWorks(actorId, options = {}) {
-    return hgActor.fetchActorWorks(actorId, options);
-  }
 }
 
 module.exports = new DramaService();
