@@ -115,6 +115,13 @@ class DramaService {
       throw new Error('未获取到该短剧的分集列表');
     }
     logger.info('DramaService', `成功获取短剧详情: 《${data.series_title || ''}》(seriesId=${sid}), 共 ${data.episodes.length} 集, 耗时 ${Date.now() - t0}ms`);
+    // 分集点赞/评论数：官方 App 接口按集返回，供播放器右侧互动栏显示（取不到时回退整剧统计）
+    let episodeSocial = null;
+    try {
+      episodeSocial = await appSource.fetchSeriesEpisodeSocial(sid);
+    } catch (err) {
+      logger.warn('DramaService', `获取分集互动数据失败，将回退整剧统计 seriesId=${sid}: ${err.message}`);
+    }
     return {
       series_id: sid,
       series_title: data.series_title || '',
@@ -125,14 +132,22 @@ class DramaService {
       episode_label: data.episode_label || '',
       social_info: data.social_info || null,
       celebrities: Array.isArray(data.celebrities) ? data.celebrities : [],
-      episodes: data.episodes.map(ep => ({
-        vid: String(ep.vid),
-        vid_index: Number(ep.vid_index),
-        title: ep.title ? String(ep.title) : `第 ${ep.vid_index} 集`,
-        series_id: sid,
-        series_title: ep.series_title || data.series_title,
-        cover: ep.cover || data.cover
-      }))
+      episodes: data.episodes.map(ep => {
+        const social = episodeSocial && episodeSocial.episodes.get(String(ep.vid));
+        return {
+          vid: String(ep.vid),
+          vid_index: Number(ep.vid_index),
+          title: ep.title ? String(ep.title) : `第 ${ep.vid_index} 集`,
+          series_id: sid,
+          series_title: ep.series_title || data.series_title,
+          cover: ep.cover || data.cover,
+          ...(social ? {
+            like_count: social.like_count,
+            comment_count: social.comment_count,
+            liked: social.liked
+          } : {})
+        };
+      })
     };
   }
 

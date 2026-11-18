@@ -1485,6 +1485,7 @@ html.platform-mac .app-header {
   padding-top: 8px;
   overflow-y: auto;
   flex: 1;
+  align-content: start;
 }
 
 .episode-btn {
@@ -1646,6 +1647,14 @@ body.hide-cursor * {
 .player-container.is-fullscreen.controls-hidden .player-controls {
   opacity: 0;
   transform: translateY(100%);
+  pointer-events: none;
+}
+
+.player-container.controls-hidden .player-action-rail,
+.player-container:fullscreen.controls-hidden .player-action-rail,
+.player-container.is-fullscreen.controls-hidden .player-action-rail {
+  opacity: 0;
+  transform: translateX(20px);
   pointer-events: none;
 }
 

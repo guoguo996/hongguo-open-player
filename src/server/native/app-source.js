@@ -299,6 +299,60 @@ function signedMetadataRequest(apiPath, values = {}, payload = null) {
     return { url, headers, body };
 }
 
+// 账号接口签名（登录态 Cookie 由调用方自行携带，不走 requestJson 的匿名设备 Cookie 注入）。
+// 证据：jackotom/hongguo-player account-session.js signedAccountRequest（GET 72232）；
+// N3urda/hongguoTV CloudAccount.kt（带 body 写请求 73932/7.3.9.32，gzip 时加 Content-Encoding）。
+const ACCOUNT_API_ALLOWLIST = [
+    '/reading/user/info/v1/',
+    '/reading/bookapi/read_history/list/v1/',
+    '/reading/bookapi/read_progress/list/v1/',
+    '/reading/bookapi/multi-detail/v1/',
+    '/reading/bookapi/bookshelf/video/info/v1/',
+    '/reading/ugc/action/mget/v1/',
+    '/reading/user/subscribe/list/v0/',
+    '/reading/bookapi/search/uncover_subscribe/v1/',
+    '/reading/bookapi/plan/v:version/',
+    '/reading/ugc/action/set/v1/',
+    '/reading/bookapi/read_progress/upload/v1/',
+];
+function signedAccountRequest(apiPath, values = {}, identity, { payload = null, gzip = false, host = 'api5-normal-sinfonlinea.fqnovel.com' } = {}) {
+    if (!ACCOUNT_API_ALLOWLIST.includes(apiPath)) throw Object.assign(new Error('不支持的账号接口'), { code: 'APP_INPUT' });
+    if (![identity?.device_id, identity?.iid].every(value => typeof value === 'string' && /^\d{1,30}$/.test(value) && /[1-9]/.test(value))
+        || typeof identity?.cdid !== 'string' || !/^[a-f0-9-]{36}$/i.test(identity.cdid)) {
+        throw Object.assign(new Error('账号请求设备身份无效'), { code: 'APP_INPUT' });
+    }
+    const write = payload !== null;
+    const versionCode = write ? '73932' : '72232';
+    const versionName = write ? '7.3.9.32' : '7.2.2.32';
+    const device = { ...DEVICE, version_code: versionCode, version_name: versionName, manifest_version_code: versionCode,
+        update_version_code: versionCode, pv_player: versionCode, iid: identity.iid, device_id: identity.device_id, cdid: identity.cdid };
+    // payload 允许传原始 JSON 文本：预约 item_id 为 19 位大整数，Number 序列化会丢精度。
+    const body = write ? (gzip ? gzipSync(Buffer.from(typeof payload === 'string' ? payload : JSON.stringify(payload))) : Buffer.from(typeof payload === 'string' ? payload : JSON.stringify(payload))) : null;
+    const khronos = Math.floor(Date.now() / 1000), ticketBase = Date.now();
+    let requestTicket = ticketBase, query = '', url = '';
+    for (let n = 0; n < 128; n += 1) {
+        requestTicket = ticketBase + n;
+        query = pythonUrlEncode({ ...values, ...device, ts: String(khronos), _rticket: String(requestTicket) });
+        url = `https://${host}${apiPath}?${query}`;
+        if (branchOf(url, body, khronos) === 0) break;
+        if (n === 127) throw new Error('无法生成账号请求签名');
+    }
+    const headers = {
+        'User-Agent': SEARCH_UA.replace('72232', versionCode), Accept: 'application/json; charset=utf-8,application/x-protobuf',
+        'x-ss-req-ticket': String(requestTicket), 'x-tt-request-tag': 't=0;n=0', 'sdk-version': '2',
+        'passport-sdk-version': '50561', 'x-xs-from-web': '0', 'x-khronos': String(khronos),
+        'x-ladon': be32(khronos).toString('base64'), 'x-argus': le32(khronos).toString('base64'),
+        'x-gorgon': xGorgon(query, body, khronos, Math.floor(Math.random() * 65536)), 'x-helios': helios(khronos),
+        'x-medusa': buildMedusa(url, body, khronos, device), 'x-tt-dt': '',
+    };
+    if (body) {
+        headers['Content-Type'] = 'application/json; charset=utf-8';
+        headers['x-ss-stub'] = md5(body);
+        if (gzip) headers['Content-Encoding'] = 'gzip';
+    }
+    return { url, headers, body };
+}
+
 function parseFallback(value) {
     if (typeof value === 'string') { const parsed = jsonBody(value); return parsed?.fallback_api || value; }
     if (Array.isArray(value)) return str(value[0]);
@@ -797,4 +851,68 @@ async function fetchAppPlayUrl(vid, options = {}) {
     return await parseEntryPlayInfo(vid, currentEntry, requestedQuality, allowLowerQuality, deadline, signal, options.allowBytevc2 === true, allowHevc, allowHevcTranscode);
 }
 
-module.exports = { fetchAppPlayUrl, clearEntryCache, isHevcCodec, signedSearchRequest, signedMetadataRequest, parseSearchInteger, requestJson, playbackRequest, shortplayRequest, SEARCH_API, SEARCH_UA };
+// 分集互动统计（点赞/评论数按集返回，与红果 App 右侧互动栏一致）
+const SOCIAL_API = 'https://reading.snssdk.com/novel/player/multi_video_detail/preload/v1';
+const SOCIAL_API_FALLBACK = 'https://api5-normal-sinfonlineb.fqnovel.com/novel/player/multi_video_detail/preload/v1';
+const SOCIAL_CACHE_TTL_MS = 3 * 60 * 1000;
+const socialCache = new Map();
+
+async function fetchSeriesEpisodeSocial(seriesId, callerSignal) {
+    const sid = String(seriesId || '').trim();
+    if (!/^\d{1,30}$/.test(sid)) throw new Error('剧集编号无效');
+    const cached = socialCache.get(sid);
+    if (cached && cached.expires > Date.now()) return cached.data;
+
+    const deadline = Date.now() + 12000;
+    const timeoutSignal = AbortSignal.timeout(12000);
+    const signal = callerSignal ? AbortSignal.any([timeoutSignal, callerSignal]) : timeoutSignal;
+    const payload = JSON.stringify({
+        biz_param: { detail_page_version: 0, device_level: 1, disable_digg_stat: false, disable_video_relate_book: false, need_all_video_definition: true, need_mp4_align: false, use_os_player: false, use_server_dns: false, video_platform: 1024 },
+        series_id: sid,
+        dr_scene: 'preload',
+    });
+    const playbackId = crypto.randomUUID();
+    const execRequestJson = (url, requestOptions, ...args) => requestJson(url,
+        { ...requestOptions, diagnostics: { playback_id: playbackId } }, ...args);
+    const device = await getPlaybackDevice(execRequestJson, signal);
+
+    let response = null;
+    let lastError = null;
+    for (const apiBase of [SOCIAL_API, SOCIAL_API_FALLBACK]) {
+        try {
+            const signed = playbackRequest(payload, device, apiBase);
+            response = await execRequestJson(signed.url, { method: 'POST', headers: signed.headers, data: signed.body }, deadline, signal);
+            if (response?.data?.[sid]?.video_data) break;
+        } catch (error) {
+            lastError = error;
+            response = null;
+        }
+    }
+    const videoData = response?.data?.[sid]?.video_data;
+    if (!videoData) throw lastError || Object.assign(new Error('分集互动接口未返回数据'), { code: 'MISSING_SOCIAL' });
+
+    const episodes = new Map();
+    for (const item of Array.isArray(videoData.video_list) ? videoData.video_list : []) {
+        const vid = str(item?.vid);
+        if (!vid) continue;
+        episodes.set(vid, {
+            like_count: Number(item.digged_count) || 0,
+            comment_count: Number(item.comment_count) || 0,
+            liked: Boolean(item.user_digg),
+        });
+    }
+    const data = {
+        series_like_count: Number(videoData.digg_cnt) || 0,
+        liked: Boolean(videoData.has_digg),
+        episodes,
+    };
+    socialCache.set(sid, { expires: Date.now() + SOCIAL_CACHE_TTL_MS, data });
+    return data;
+}
+
+function clearSeriesSocialCache(seriesId) {
+    const sid = String(seriesId || '').trim();
+    if (sid) socialCache.delete(sid);
+}
+
+module.exports = { fetchAppPlayUrl, fetchSeriesEpisodeSocial, clearSeriesSocialCache, clearEntryCache, isHevcCodec, signedSearchRequest, signedMetadataRequest, signedAccountRequest, parseSearchInteger, requestJson, playbackRequest, shortplayRequest, SEARCH_API, SEARCH_UA };

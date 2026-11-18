@@ -457,6 +457,516 @@ const app = createApp({
       }
     }
 
+    // ================= 红果账号：扫码登录 / 云端记录 / 预约 / 发弹幕 =================
+    const account = ref({ logged_in: false, user: null, expired: false, notice: '', storage_encrypted: false });
+    const showAccountModal = ref(false);
+    const accountTab = ref('login'); // 'login' | 'history' | 'likes' | 'favorites' | 'reserves'
+    const accountRecords = ref({
+      history: { loading: false, items: [], notice: '', loaded: false },
+      likes: { loading: false, items: [], notice: '', loaded: false },
+      favorites: { loading: false, items: [], notice: '', loaded: false },
+      reserves: { loading: false, items: [], notice: '', loaded: false },
+    });
+    const qr = ref({ token: '', qrcode: '', expire_at: 0, countdown: 0, status: 'idle', notice: '', loading: false });
+    let qrPollTimer = null;
+    let qrCountdownTimer = null;
+    const relatedWorks = ref([]);
+    const relatedWorksLoading = ref(false);
+    const relatedWorksNotice = ref('');
+    const reservedIds = ref(new Set());
+    const pendingReserveId = ref('');
+    let pendingReserveTimer = null;
+    const reservingId = ref('');
+    const danmakuText = ref('');
+    const sendingDanmaku = ref(false);
+
+    // ================= 播放右侧互动栏：点赞 / 评论 / 收藏 =================
+    const socialState = ref({ like_count: 0, comment_count: 0, collect_count: 0, liked: false, collected: false });
+    const socialBusy = ref(false);
+    const showComments = ref(false);
+    const comments = ref({ loading: false, items: [], total: 0, has_more: false, cursor: '', notice: '', key: '' });
+    let commentsRequest = 0;
+    let socialKey = '';
+
+    function formatCount(value) {
+      const num = Number(value) || 0;
+      if (num >= 100000000) return (num / 100000000).toFixed(1).replace(/\.0$/, '') + '亿';
+      if (num >= 10000) return (num / 10000).toFixed(1).replace(/\.0$/, '') + '万';
+      return String(num);
+    }
+
+    function currentVid() {
+      return activeEpisodes.value.find(e => e.vid_index === activeEpisodeIndex.value)?.vid || '';
+    }
+
+    // 从账号云端记录推断当前剧是否已点赞/收藏（记录未加载时保守置 false）。
+    function deriveSocialFlags() {
+      const seriesId = String(activeSeries.value?.series_id || '');
+      if (!account.value.logged_in || !seriesId) return { liked: false, collected: false };
+      const inList = list => (list || []).some(item => String(item.series_id || item.seriesId || '') === seriesId);
+      return {
+        liked: inList(accountRecords.value.likes?.items),
+        collected: inList(accountRecords.value.favorites?.items),
+      };
+    }
+
+    async function loadSocialState(force = false) {
+      const seriesId = activeSeries.value?.series_id;
+      const vid = currentVid();
+      const key = `${seriesId}:${vid}`;
+      if (!seriesId || !vid || (!force && key === socialKey)) return;
+      socialKey = key;
+      const info = activeSeries.value?.social_info || {};
+      const episode = activeEpisodes.value.find(e => String(e.vid) === String(vid));
+      const hasEpisodeLikes = episode && Number.isFinite(Number(episode.like_count));
+      const flags = deriveSocialFlags();
+      socialState.value = {
+        // 点赞数按“本集”取，和红果 App 一致；接口不可用时才回退整剧统计
+        like_count: hasEpisodeLikes ? Number(episode.like_count) : (Number(info.like_count) || 0),
+        collect_count: Number(info.favorite_count) || 0,
+        comment_count: Number(episode?.comment_count) || socialState.value.comment_count || 0,
+        liked: episode && typeof episode.liked === 'boolean' ? episode.liked : flags.liked,
+        collected: flags.collected,
+      };
+      // 评论总数：拉首页评论顺带预热抽屉数据。
+      const request = ++commentsRequest;
+      comments.value = { loading: true, items: [], total: 0, has_more: false, cursor: '', notice: '', key };
+      try {
+        const data = await fetch(`/api/video-comments/${encodeURIComponent(seriesId)}/${encodeURIComponent(vid)}`).then(r => r.json());
+        if (request !== commentsRequest) return;
+        comments.value = {
+          loading: false,
+          items: Array.isArray(data.items) ? data.items : [],
+          total: Number(data.total) || 0,
+          has_more: Boolean(data.has_more),
+          cursor: typeof data.cursor === 'string' ? data.cursor : '',
+          notice: data.notice || (data.success ? '' : '评论加载失败'),
+          key,
+        };
+        socialState.value.comment_count = comments.value.total;
+      } catch (_) {
+        if (request === commentsRequest) {
+          comments.value = { loading: false, items: [], total: 0, has_more: false, cursor: '', notice: '评论加载失败', key };
+        }
+      }
+    }
+
+    function openComments() {
+      showComments.value = true;
+      const key = `${activeSeries.value?.series_id}:${currentVid()}`;
+      if (comments.value.key !== key || (!comments.value.items.length && !comments.value.notice)) loadSocialState(true);
+    }
+
+    function closeComments() {
+      showComments.value = false;
+      keepPlayerFocus();
+    }
+
+    async function loadMoreComments() {
+      const seriesId = activeSeries.value?.series_id;
+      const vid = currentVid();
+      if (!seriesId || !vid || comments.value.loading || !comments.value.has_more) return;
+      const request = commentsRequest;
+      comments.value.loading = true;
+      try {
+        const data = await fetch(`/api/video-comments/${encodeURIComponent(seriesId)}/${encodeURIComponent(vid)}?cursor=${encodeURIComponent(comments.value.cursor)}`).then(r => r.json());
+        if (request !== commentsRequest) return;
+        const seen = new Set(comments.value.items.map(item => item.comment_id));
+        const fresh = (Array.isArray(data.items) ? data.items : []).filter(item => !seen.has(item.comment_id));
+        comments.value.items = comments.value.items.concat(fresh);
+        comments.value.has_more = Boolean(data.has_more);
+        comments.value.cursor = typeof data.cursor === 'string' ? data.cursor : '';
+        comments.value.total = Number(data.total) || comments.value.total;
+        comments.value.notice = data.notice || '';
+      } catch (_) {
+        if (request === commentsRequest) comments.value.notice = '加载更多评论失败';
+      } finally {
+        if (request === commentsRequest) comments.value.loading = false;
+      }
+    }
+
+    async function toggleLike() {
+      if (!account.value.logged_in) { notify('请先扫码登录红果账号'); showAccountModal.value = true; accountTab.value = 'login'; return; }
+      const seriesId = activeSeries.value?.series_id;
+      const vid = currentVid();
+      if (!seriesId || !vid || socialBusy.value) return;
+      socialBusy.value = true;
+      const next = !socialState.value.liked;
+      try {
+        const res = await fetch('/api/account/like', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ series_id: String(seriesId), vid: String(vid), action: next ? 'like' : 'unlike' }),
+        }).then(r => r.json());
+        if (res.error) throw new Error(res.error);
+        socialState.value.liked = next;
+        socialState.value.like_count = Math.max(0, socialState.value.like_count + (next ? 1 : -1));
+        const episode = activeEpisodes.value.find(e => String(e.vid) === String(vid));
+        if (episode) {
+          episode.liked = next;
+          episode.like_count = socialState.value.like_count;
+        }
+        if (accountRecords.value.likes?.loaded) loadAccountRecords('likes', true);
+      } catch (err) {
+        notify('点赞失败：' + (err.message || '请稍后重试'));
+      } finally {
+        socialBusy.value = false;
+        keepPlayerFocus();
+      }
+    }
+
+    async function toggleCollect() {
+      if (!account.value.logged_in) { notify('请先扫码登录红果账号'); showAccountModal.value = true; accountTab.value = 'login'; return; }
+      const seriesId = activeSeries.value?.series_id;
+      const vid = currentVid();
+      if (!seriesId || !vid || socialBusy.value) return;
+      socialBusy.value = true;
+      const next = !socialState.value.collected;
+      try {
+        const res = await fetch('/api/account/collect', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ series_id: String(seriesId), vid: String(vid), action: next ? 'collect' : 'uncollect' }),
+        }).then(r => r.json());
+        if (res.error) throw new Error(res.error);
+        socialState.value.collected = next;
+        socialState.value.collect_count = Math.max(0, socialState.value.collect_count + (next ? 1 : -1));
+        if (accountRecords.value.favorites?.loaded) loadAccountRecords('favorites', true);
+      } catch (err) {
+        notify('收藏失败：' + (err.message || '请稍后重试'));
+      } finally {
+        socialBusy.value = false;
+        keepPlayerFocus();
+      }
+    }
+
+    // 本地会话 Cookie 自愈：服务重启后旧 Cookie 作废会返 401，先 GET / 重建会话再重试一次。
+    async function apiFetch(url, options) {
+      let response = await fetch(url, options);
+      if (response.status === 401) {
+        try { await fetch('/', { cache: 'no-store' }); } catch (_) {}
+        response = await fetch(url, options);
+      }
+      return response;
+    }
+
+    async function loadAccountStatus() {
+      try {
+        const data = await apiFetch('/api/account/status').then(r => r.json());
+        if (data?.success) account.value = data;
+      } catch (_) {}
+    }
+
+    function stopQrPolling() {
+      if (qrPollTimer) { clearInterval(qrPollTimer); qrPollTimer = null; }
+      if (qrCountdownTimer) { clearInterval(qrCountdownTimer); qrCountdownTimer = null; }
+    }
+
+    function startQrCountdown() {
+      if (qrCountdownTimer) clearInterval(qrCountdownTimer);
+      qrCountdownTimer = setInterval(() => {
+        if (!qr.value.expire_at) return;
+        qr.value.countdown = Math.max(0, Math.ceil((qr.value.expire_at - Date.now()) / 1000));
+      }, 1000);
+    }
+
+    async function startQrLogin() {
+      stopQrPolling();
+      qr.value = { token: '', qrcode: '', expire_at: 0, countdown: 0, status: 'loading', notice: '', loading: true };
+      try {
+        const data = await fetch('/api/account/login/qrcode', { method: 'POST' }).then(r => r.json());
+        if (data?.success && data.qrcode) {
+          qr.value = {
+            token: data.token, qrcode: data.qrcode, expire_at: data.expire_at,
+            countdown: Math.max(0, Math.ceil((data.expire_at - Date.now()) / 1000)),
+            status: 'pending', notice: '', loading: false,
+          };
+          qrPollTimer = setInterval(pollQrLogin, 2000);
+          startQrCountdown();
+        } else {
+          qr.value = { ...qr.value, status: 'error', notice: data?.notice || data?.error || '获取二维码失败', loading: false };
+        }
+      } catch (_) {
+        qr.value = { ...qr.value, status: 'error', notice: '获取二维码网络异常，请重试', loading: false };
+      }
+    }
+
+    // 官网二维码有效期仅约 60 秒：到期自动换一张新码，避免用户扫到过期码。
+    async function refreshQrAuto() {
+      stopQrPolling();
+      await startQrLogin();
+      if (qr.value.status === 'pending') qr.value.notice = '二维码已自动刷新，请尽快扫码';
+    }
+
+    async function pollQrLogin() {
+      if (!qr.value.token || qr.value.status === 'confirmed') { stopQrPolling(); return; }
+      // 本地到期且尚未扫码 → 自动刷新；已扫码时交给服务端判定，避免打断手机确认。
+      if (qr.value.expire_at && Date.now() > qr.value.expire_at && qr.value.status !== 'scanned') {
+        await refreshQrAuto();
+        return;
+      }
+      try {
+        const data = await fetch('/api/account/login/poll', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: qr.value.token }),
+        }).then(r => r.json());
+        if (data?.status === 'confirmed') {
+          stopQrPolling();
+          qr.value.status = 'confirmed';
+          await loadAccountStatus();
+          notify(`登录成功${data.user?.name ? '：' + data.user.name : ''}`);
+          accountTab.value = 'history';
+          loadAccountRecords('history');
+        } else if (data?.status === 'expired') {
+          await refreshQrAuto();
+        } else if (data?.success === false) {
+          stopQrPolling();
+          qr.value.status = 'error';
+          qr.value.notice = data.notice || '登录失败，请刷新二维码';
+        } else {
+          qr.value.status = data?.scanned ? 'scanned' : 'pending';
+        }
+      } catch (_) { /* 网络抖动时继续轮询 */ }
+    }
+
+    async function logoutAccount() {
+      stopQrPolling();
+      try { await fetch('/api/account/logout', { method: 'POST' }); } catch (_) {}
+      account.value = { logged_in: false, user: null, expired: false, notice: '', storage_encrypted: account.value.storage_encrypted };
+      qr.value = { token: '', qrcode: '', expire_at: 0, countdown: 0, status: 'idle', notice: '', loading: false };
+      for (const key of Object.keys(accountRecords.value)) accountRecords.value[key] = { loading: false, items: [], notice: '', loaded: false };
+      reservedIds.value = new Set();
+      accountTab.value = 'login';
+      notify('已退出红果账号');
+    }
+
+    function openAccountModal(tab) {
+      showAppMenu.value = false;
+      showAccountModal.value = true;
+      loadAccountStatus();
+      switchAccountTab(tab || 'login');
+      nextTick(() => document.querySelector('.account-modal')?.focus?.());
+    }
+
+    function closeAccountModal() {
+      showAccountModal.value = false;
+      stopQrPolling();
+      keepPlayerFocus();
+    }
+
+    function onAccountModalKeydown(e) {
+      if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); closeAccountModal(); }
+    }
+
+    function switchAccountTab(tab) {
+      accountTab.value = tab;
+      if (tab === 'login') {
+        if (!account.value.logged_in && qr.value.status === 'idle') startQrLogin();
+        return;
+      }
+      if (!account.value.logged_in) {
+        accountTab.value = 'login';
+        if (qr.value.status === 'idle') startQrLogin();
+        return;
+      }
+      loadAccountRecords(tab);
+    }
+
+    async function loadAccountRecords(kind) {
+      const slot = accountRecords.value[kind];
+      if (!slot || slot.loading) return;
+      slot.loading = true;
+      slot.notice = '';
+      try {
+        const data = await apiFetch(`/api/account/${kind}`).then(r => r.json());
+        if (data?.success) {
+          slot.items = Array.isArray(data.items) ? data.items : [];
+          slot.notice = data.notice || '';
+          if (kind === 'reserves') {
+            reservedIds.value = new Set(slot.items.map(i => i.series_id).filter(Boolean));
+            // 当前 sub-tab 为空而另一类有数据时，自动切到有数据的一类
+            const upcomingCount = slot.items.filter(i => i.upcoming).length;
+            const onlineCount = slot.items.length - upcomingCount;
+            if (reserveSubTab.value === 'upcoming' && !upcomingCount && onlineCount) reserveSubTab.value = 'online';
+            else if (reserveSubTab.value === 'online' && !onlineCount && upcomingCount) reserveSubTab.value = 'upcoming';
+          }
+        } else {
+          slot.items = [];
+          slot.notice = data?.notice || data?.error || '加载失败';
+          if (data?.need_login) await loadAccountStatus();
+        }
+        slot.loaded = true;
+      } catch (_) {
+        slot.notice = '网络异常，加载失败';
+      } finally {
+        slot.loading = false;
+      }
+    }
+
+    // 预约记录用同一排的 sub-tab 切换"未上线/已上线"；其余标签直接展示全部。
+    const reserveSubTab = ref('upcoming'); // 'upcoming' | 'online'
+    const reserveSubTabs = computed(() => {
+      const items = accountRecords.value.reserves?.items || [];
+      return [
+        { key: 'upcoming', label: '未上线', count: items.filter(i => i.upcoming).length },
+        { key: 'online', label: '已上线', count: items.filter(i => !i.upcoming).length },
+      ];
+    });
+    const visibleRecordItems = computed(() => {
+      const kind = cloudRecordKind.value;
+      const items = accountRecords.value[kind]?.items || [];
+      if (kind !== 'reserves') return items;
+      return reserveSubTab.value === 'upcoming' ? items.filter(i => i.upcoming) : items.filter(i => !i.upcoming);
+    });
+    function switchReserveSubTab(key) { reserveSubTab.value = key; }
+
+    // 主页面云端记录标签：映射到账号记录类别，复用记录列表渲染（accountTab 同步设为该类别）。
+    const CLOUD_TAB_KIND = { 'cloud-history': 'history', 'cloud-likes': 'likes', 'cloud-favorites': 'favorites', 'cloud-reserves': 'reserves' };
+    const cloudRecordKind = computed(() => CLOUD_TAB_KIND[currentTab.value] || '');
+    const isCloudTab = computed(() => !!cloudRecordKind.value);
+    watch(() => account.value.logged_in, logged => { if (logged && cloudRecordKind.value) loadAccountRecords(cloudRecordKind.value); });
+
+    // 预约/点赞/收藏记录本身不含观看进度（只有预约记录更只有剧集信息），
+    // 回查账号云端播放记录里同一部剧的进度，用于续播。
+    async function findCloudProgress(seriesId) {
+      if (!account.value.logged_in) return null;
+      const sid = String(seriesId);
+      const pick = () => (accountRecords.value.history?.items || [])
+        .find(i => String(i.series_id) === sid && Number(i.episode_index) > 0) || null;
+      const cached = pick();
+      if (cached || accountRecords.value.history?.loaded) return cached;
+      await loadAccountRecords('history');
+      return pick();
+    }
+
+    async function playFromCloudRecord(item) {
+      if (!item?.series_id) return;
+      closeAccountModal();
+      // 记录里没有集数时（预约菜单等），按云端播放记录的上次进度续播
+      const progress = item.episode_index ? item : (await findCloudProgress(item.series_id)) || item;
+      const episodeIndex = Number(progress.episode_index) || 0;
+      const resumeSec = Math.floor((progress.position_ms || 0) / 1000);
+      await openTheater(
+        { series_id: item.series_id, series_title: item.title || '', cover: item.cover || '' },
+        { episodeIndex, resumeSec }
+      );
+    }
+
+    // ── 相关作品与预约下一季（挂在"系列全季"弹窗） ──
+    async function loadRelatedWorks() {
+      const seriesId = activeSeries.value?.series_id;
+      if (!seriesId || relatedWorksLoading.value) return;
+      relatedWorksLoading.value = true;
+      relatedWorksNotice.value = '';
+      try {
+        const data = await fetch(`/api/series/${encodeURIComponent(seriesId)}/related`).then(r => r.json());
+        if (data?.success) {
+          relatedWorks.value = data.items || [];
+          relatedWorksNotice.value = data.notice || '';
+        } else {
+          relatedWorks.value = [];
+          relatedWorksNotice.value = data?.notice || '相关作品加载失败';
+        }
+      } catch (_) {
+        relatedWorksNotice.value = '相关作品网络异常';
+      } finally {
+        relatedWorksLoading.value = false;
+      }
+    }
+
+    async function loadReservedIds() {
+      if (!account.value.logged_in) return;
+      try {
+        const data = await fetch('/api/account/reserves').then(r => r.json());
+        if (data?.success) {
+          reservedIds.value = new Set(data.items.map(i => i.series_id).filter(Boolean));
+          accountRecords.value.reserves.items = data.items;
+          accountRecords.value.reserves.notice = data.notice || '';
+          accountRecords.value.reserves.loaded = true;
+        }
+      } catch (_) {}
+    }
+
+    // 两段式确认：第一次点击变为"确认预约？"，5 秒内再点一次才真正提交（写操作）。
+    function askReserve(item) {
+      if (!account.value.logged_in) { notify('请先扫码登录红果账号'); openAccountModal('login'); return; }
+      if (reservedIds.value.has(item.series_id) || reservingId.value) return;
+      if (pendingReserveId.value === item.series_id) { confirmReserve(item); return; }
+      pendingReserveId.value = item.series_id;
+      clearTimeout(pendingReserveTimer);
+      pendingReserveTimer = setTimeout(() => { pendingReserveId.value = ''; }, 5000);
+    }
+
+    async function confirmReserve(item) {
+      clearTimeout(pendingReserveTimer);
+      pendingReserveId.value = '';
+      reservingId.value = item.series_id;
+      try {
+        const data = await fetch('/api/account/reserve', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ series_id: item.series_id }),
+        }).then(r => r.json());
+        if (data?.success) {
+          reservedIds.value = new Set([...reservedIds.value, item.series_id]);
+          notify(data.notice || '预约已提交');
+          loadAccountRecords('reserves');
+        } else {
+          notify(data?.notice || data?.error || '预约失败');
+          if (data?.need_login) openAccountModal('login');
+        }
+      } catch (_) {
+        notify('预约网络异常，请重试');
+      } finally {
+        reservingId.value = '';
+      }
+    }
+
+    // ── 发弹幕（推断端点，失败时界面如实提示） ──
+    async function sendDanmaku() {
+      const text = danmakuText.value.trim();
+      if (!text || sendingDanmaku.value) return;
+      if (!account.value.logged_in) { notify('请先扫码登录红果账号后再发弹幕'); openAccountModal('login'); return; }
+      const seriesId = activeSeries.value?.series_id;
+      const ep = activeEpisodes.value.find(e => e.vid_index === activeEpisodeIndex.value);
+      if (!seriesId || !ep?.vid) { notify('当前剧集信息不完整，无法发送'); return; }
+      sendingDanmaku.value = true;
+      try {
+        const data = await apiFetch('/api/danmaku/publish', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            series_id: String(seriesId), vid: String(ep.vid), text,
+            time: currentTime.value || 0, duration: duration.value || 0,
+          }),
+        }).then(r => r.json());
+        if (data?.success) {
+          danmakuText.value = '';
+          notify(data.notice || '弹幕已发送');
+          loadDanmaku(true);
+        } else {
+          notify(data?.notice || data?.error || '弹幕发送失败');
+          if (data?.need_login) openAccountModal('login');
+        }
+      } catch (_) {
+        notify('弹幕发送网络异常，请重试');
+      } finally {
+        sendingDanmaku.value = false;
+      }
+    }
+
+    function formatRecordTime(ms) {
+      if (!ms) return '';
+      const d = new Date(ms);
+      if (Number.isNaN(d.getTime())) return '';
+      const now = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      const date = `${d.getFullYear() === now.getFullYear() ? '' : d.getFullYear() + '/'}${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+      return `${date} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    function recordProgressText(item) {
+      if (!item.duration_ms || !item.position_ms) return '';
+      const pct = Math.min(100, Math.round(item.position_ms / item.duration_ms * 100));
+      return `看到 ${pct}%`;
+    }
+
     function openAboutModal() {
       showAppMenu.value = false;
       showAboutModal.value = true;
@@ -673,7 +1183,7 @@ const app = createApp({
       const total = activeEpisodes.value.length;
       if (total === 0) return [];
       const groups = [];
-      const size = 30;
+      const size = 80;
       for (let i = 1; i <= total; i += size) {
         groups.push({
           start: i,
@@ -789,6 +1299,12 @@ const app = createApp({
       if (tab === 'actors') {
         actorPage.value = 1;
         loadActorRankings();
+      } else if (CLOUD_TAB_KIND[tab]) {
+        // 云端记录标签：不走目录加载，直接拉对应账号记录（未登录时主区域显示登录门槛）。
+        actorRankingRequestId++;
+        loadingActors.value = false;
+        const kind = CLOUD_TAB_KIND[tab];
+        if (account.value.logged_in) loadAccountRecords(kind);
       } else {
         // 切出剧星榜时立即使进行中的榜单请求失效，避免晚到数据污染
         actorRankingRequestId++;
@@ -1358,6 +1874,8 @@ const app = createApp({
 
     function openSeasonsModal() {
       showSeasonsModal.value = true;
+      loadRelatedWorks();
+      loadReservedIds();
       if (typeof nextTick === 'function') {
         nextTick(() => {
           const modal = document?.querySelector?.('.seasons-modal');
@@ -1414,6 +1932,7 @@ const app = createApp({
     function leaveTheater() {
       theaterRequest++;
       saveProgressNow();
+      reportCloudProgress(true);
       if (videoEl.value && typeof videoEl.value.pause === 'function') videoEl.value.pause();
       resetPlayback();
       videoResolution.value = { width: 0, height: 0 };
@@ -1421,12 +1940,20 @@ const app = createApp({
       clearTimeout(controlsHideTimer);
       showDramaDetailModal.value = false;
       showSeasonsModal.value = false;
+      relatedWorks.value = [];
+      relatedWorksNotice.value = '';
       sidebarTab.value = 'episodes';
+      showComments.value = false;
+      socialKey = '';
+      commentsRequest++;
+      socialState.value = { like_count: 0, comment_count: 0, collect_count: 0, liked: false, collected: false };
+      comments.value = { loading: false, items: [], total: 0, has_more: false, cursor: '', notice: '', key: '' };
       viewMode.value = 'catalog';
       if (navigator.mediaSession) { navigator.mediaSession.playbackState = 'none'; navigator.mediaSession.metadata = null; }
     }
 
-    async function openTheater(drama) {
+    // options.episodeIndex / options.resumeSec：外部记录（如云端播放记录）指定的续播位置
+    async function openTheater(drama, options = {}) {
       const request = ++theaterRequest;
       videoErrorMessage.value = '';
       isBuffering.value = true;
@@ -1457,12 +1984,13 @@ const app = createApp({
 
         // 计算初始选集分组
         const groups = episodeGroups.value;
-        currentGroup.value = groups[0] || { start: 1, end: 30 };
+        currentGroup.value = groups[0] || { start: 1, end: 80 };
 
-        // 默认恢复上次观看进度或第一集
-        let targetIndex = detail.episodes[0].vid_index;
-        let resumeSec = 0;
-        if (detail.saved_progress) {
+        // 默认恢复上次观看进度或第一集；外部指定了目标集时以外部为准
+        const optionIndex = Number(options.episodeIndex) || 0;
+        let targetIndex = optionIndex || detail.episodes[0].vid_index;
+        let resumeSec = optionIndex ? Number(options.resumeSec) || 0 : 0;
+        if (!optionIndex && detail.saved_progress) {
           targetIndex = Number(detail.saved_progress.episode_index) || 1;
           resumeSec = Number(detail.saved_progress.position_sec) || 0;
         }
@@ -1473,6 +2001,7 @@ const app = createApp({
         }
         activeEpisodeIndex.value = targetIndex;
         loadDanmaku();
+        loadSocialState(true);
         // 定位所属分组
         const matchedGroup = groups.find(g => targetIndex >= g.start && targetIndex <= g.end);
         if (matchedGroup) currentGroup.value = matchedGroup;
@@ -1511,6 +2040,7 @@ const app = createApp({
       isBuffering.value = true;
       activeEpisodeIndex.value = ep.vid_index;
       loadDanmaku();
+      loadSocialState(true);
       currentTime.value = 0;
 
 
@@ -1645,6 +2175,17 @@ const app = createApp({
         }).then(r => r.json());
         if (res.error) throw new Error(res.error);
         isFavorited.value = !!res.is_favorite;
+        // 本地收藏同步到红果账号（官方 App 收藏记录可见），与右侧⭐同一写端点。
+        if (account.value.logged_in) {
+          const vid = currentVid();
+          socialState.value.collected = !!res.is_favorite;
+          if (vid) {
+            fetch('/api/account/collect', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ series_id: activeSeries.value.series_id, vid, action: res.is_favorite ? 'collect' : 'uncollect' }),
+            }).catch(() => {});
+          }
+        }
       } catch (err) {
         console.error('收藏切换失败:', err);
         notify('收藏保存失败，请稍后重试');
@@ -1704,6 +2245,7 @@ const app = createApp({
       danmakuEngine?.pause?.();
       if (navigator.mediaSession) navigator.mediaSession.playbackState = 'paused';
       saveProgressNow();
+      reportCloudProgress(true);
       setControlsHidden(false);
       clearTimeout(controlsHideTimer);
     }
@@ -1722,7 +2264,7 @@ const app = createApp({
         videoEl.value.volume = Number(volume.value);
         videoEl.value.muted = isMuted.value;
         if (navigator.mediaSession && typeof MediaMetadata !== 'undefined') {
-          navigator.mediaSession.metadata = new MediaMetadata({ title: `${activeSeries.value?.series_title || ''} · 第 ${activeEpisodeIndex.value} 集`, artist: '红果开源播放器' });
+          navigator.mediaSession.metadata = new MediaMetadata({ title: `${activeSeries.value?.series_title || ''} · 第 ${activeEpisodeIndex.value} 集`, artist: '红果播放器 Plus' });
         }
         reportClientLog('INFO', `视频元数据解析就绪: 《${activeSeries.value?.series_title || ''}》 第 ${activeEpisodeIndex.value} 集, 时长=${formatTime(duration.value)}, 画面=${videoEl.value.videoWidth || 0}x${videoEl.value.videoHeight || 0}`);
         videoEl.value.playbackRate = parseFloat(playbackRate.value);
@@ -1894,6 +2436,30 @@ const app = createApp({
       return set ? set.has(index) : false;
     }
 
+    // 播放进度同步上报红果账号（官方 App 播放记录可见）。节流 20s，离开剧场时强制。
+    let lastCloudProgressAt = 0;
+    async function reportCloudProgress(force = false) {
+      if (!account.value.logged_in) return;
+      if (!activeSeries.value || !progressReady || viewMode.value !== 'theater') return;
+      const now = Date.now();
+      if (!force && now - lastCloudProgressAt < 20000) return;
+      lastCloudProgressAt = now;
+      const curEp = activeEpisodes.value.find(e => e.vid_index === activeEpisodeIndex.value);
+      try {
+        await fetch('/api/account/progress', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            series_id: activeSeries.value.series_id,
+            vid: curEp?.vid || '',
+            episode_index: activeEpisodeIndex.value,
+            position_sec: currentTime.value,
+            duration_sec: duration.value,
+            episode_count: activeSeries.value.total,
+          }),
+        });
+      } catch (_) { /* 云端上报失败不影响本地进度 */ }
+    }
+
     function saveProgressNow() {
       if (!activeSeries.value || !progressReady || viewMode.value !== 'theater') return;
       const curEp = activeEpisodes.value.find(e => e.vid_index === activeEpisodeIndex.value);
@@ -1912,6 +2478,7 @@ const app = createApp({
           watched_indexes: [...(watchedMap.value.get(activeSeries.value.series_id) || [])]
         })
       }).then(response => { if (!response.ok) throw new Error('保存失败'); }).catch(() => notify('观看进度保存失败，请检查数据目录是否可写'));
+      reportCloudProgress();
     }
 
     function onImageError(e) {
@@ -1956,6 +2523,11 @@ const app = createApp({
         if (showAboutModal.value) {
           e.preventDefault();
           closeAboutModal();
+          return;
+        }
+        if (showAccountModal.value) {
+          e.preventDefault();
+          closeAccountModal();
           return;
         }
         if (showDramaDetailModal.value) {
@@ -2059,6 +2631,7 @@ const app = createApp({
       loadPreferences();
       loadSearchHistory();
       loadCatalog();
+      loadAccountStatus();
       window.addEventListener('keydown', handleKeyDown);
       window.addEventListener('click', handleGlobalClick);
       window.addEventListener('mousemove', handleWindowMouseMove);
@@ -2097,6 +2670,8 @@ const app = createApp({
         try { navigator.mediaSession.setActionHandler(name, null); } catch (_) {}
       }
       if (progressTimer) clearInterval(progressTimer);
+      stopQrPolling();
+      clearTimeout(pendingReserveTimer);
     });
 
     return {
@@ -2227,7 +2802,18 @@ const app = createApp({
       openGithubRepo,
       resetDevice,
       currentDeviceId,
-      isResettingDevice
+      isResettingDevice,
+      account, showAccountModal, accountTab, accountRecords, qr,
+      reserveSubTab, reserveSubTabs, visibleRecordItems, switchReserveSubTab,
+      cloudRecordKind, isCloudTab,
+      openAccountModal, closeAccountModal, onAccountModalKeydown, switchAccountTab,
+      startQrLogin, logoutAccount, loadAccountRecords, playFromCloudRecord,
+      relatedWorks, relatedWorksLoading, relatedWorksNotice, loadRelatedWorks,
+      reservedIds, pendingReserveId, reservingId, askReserve,
+      danmakuText, sendingDanmaku, sendDanmaku,
+      socialState, socialBusy, showComments, comments,
+      formatCount, openComments, closeComments, loadMoreComments, toggleLike, toggleCollect,
+      formatRecordTime, recordProgressText
     };
   }
 });

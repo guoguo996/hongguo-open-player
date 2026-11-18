@@ -38,7 +38,7 @@ async function buildWindow() {
   }
   logger.info('Electron', `正在启动原生客户端: 架构=${process.arch}, 平台=${process.platform}, 版本=${typeof app.getVersion === 'function' ? app.getVersion() : 'dev'}`);
   const { startServer } = require('../server/index.js');
-  serverStart ||= startServer(8899).catch(error => { serverStart = null; throw error; });
+  serverStart ||= startServer(8900).catch(error => { serverStart = null; throw error; });
   const res = await serverStart;
   serverInstance = res.server;
   const port = res.port;
@@ -50,7 +50,7 @@ async function buildWindow() {
     height: 840,
     minWidth: 960,
     minHeight: 640,
-    title: '红果开源播放器',
+    title: '红果播放器 Plus',
     backgroundColor: '#0f1015',
     autoHideMenuBar: !isMac, // Windows 下默认隐藏传统菜单栏，保持纯粹现代深色观影质感 (按 Alt 唤出)
     webPreferences: {
@@ -139,8 +139,8 @@ function showAboutDialog() {
 
   dialog.showMessageBox(mainWindow || undefined, {
     type: 'info',
-    title: '关于 红果开源播放器',
-    message: `红果开源播放器 v${version}`,
+    title: '关于 红果播放器 Plus',
+    message: `红果播放器 Plus v${version}`,
     detail: `一款优雅、无广告的开源跨平台红果短剧播放器。\n\n项目开源主页: ${GITHUB_REPO_URL}\n开源许可: GPL-3.0`,
     buttons: ['访问 GitHub 主页', '确定'],
     defaultId: 0,
@@ -161,10 +161,10 @@ function setupMenu() {
     ...(isMac
       ? [
           {
-            label: '红果开源播放器',
+            label: '红果播放器 Plus',
             submenu: [
               {
-                label: '关于 红果开源播放器',
+                label: '关于 红果播放器 Plus',
                 click: () => showAboutDialog()
               },
               {
@@ -178,11 +178,11 @@ function setupMenu() {
               { type: 'separator' },
               { role: 'services', label: '服务' },
               { type: 'separator' },
-              { role: 'hide', label: '隐藏 红果开源播放器' },
+              { role: 'hide', label: '隐藏 红果播放器 Plus' },
               { role: 'hideOthers', label: '隐藏其他' },
               { role: 'unhide', label: '全部显示' },
               { type: 'separator' },
-              { role: 'quit', label: '退出 红果开源播放器' }
+              { role: 'quit', label: '退出 红果播放器 Plus' }
             ]
           }
         ]
@@ -233,7 +233,7 @@ function setupMenu() {
       label: '帮助',
       submenu: [
         {
-          label: '关于 红果开源播放器',
+          label: '关于 红果播放器 Plus',
           click: () => showAboutDialog()
         },
         {
@@ -296,7 +296,7 @@ if (!gotTheLock) {
     }
     if (typeof app.setAboutPanelOptions === 'function') {
       app.setAboutPanelOptions({
-        applicationName: '红果开源播放器',
+        applicationName: '红果播放器 Plus',
         applicationVersion: typeof app.getVersion === 'function' ? app.getVersion() : '1.0.0',
         copyright: 'Copyright © 2026 zfdang. Licensed under GPL-3.0.',
         website: GITHUB_REPO_URL,
