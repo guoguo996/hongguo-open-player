@@ -384,13 +384,11 @@ app.get('/api/series/:seriesId', async (req, res) => {
   try {
     const { seriesId } = req.params;
     const detail = await dramaService.getSeriesDetail(seriesId);
-    // 注入用户本地观看历史及收藏状态
+    // 注入用户本地观看历史
     const savedProgress = storeService.getSeriesProgress(seriesId);
-    const isFav = storeService.isFavorite(seriesId);
     res.json({
       ...detail,
-      saved_progress: savedProgress,
-      is_favorite: isFav
+      saved_progress: savedProgress
     });
   } catch (err) {
     sendApiError(res, err);
@@ -463,22 +461,6 @@ app.post('/api/progress', async (req, res) => {
     const item = req.body;
     const updated = await storeService.updateProgress(item);
     res.json({ success: true, progress: updated });
-  } catch (err) {
-    sendApiError(res, err);
-  }
-});
-
-/**
- * 7. 收藏夹管理
- */
-app.get('/api/favorites', (req, res) => {
-  res.json(storeService.getFavorites());
-});
-
-app.post('/api/favorites/toggle', async (req, res) => {
-  try {
-    const isFav = await storeService.toggleFavorite(req.body);
-    res.json({ success: true, is_favorite: isFav });
   } catch (err) {
     sendApiError(res, err);
   }

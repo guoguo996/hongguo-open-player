@@ -54,6 +54,14 @@ const DEVICE = {
 function str(value, fallback = '') { return String(value == null ? fallback : value).trim(); }
 function cleanUrl(value) { return str(value).replace(/\\\//g, '/').replace(/\\u0026/g, '&').replace(/&amp;/g, '&'); }
 function jsonBody(value) { try { return JSON.parse(value); } catch { return null; } }
+// 19 位大整数 id（series_id/book_id/vid 等）超出 Number 安全范围，JSON.parse 会丢精度
+// （尾部被舍入成 000），后续按 id 查分集必然 404。与 video-comments.parseCommentJson 同一
+// 纪律：解析前把指定键名的长整数字面量加引号变字符串，调用方按需声明键名。
+function guardJsonIdKeys(raw, keys) {
+    if (!Array.isArray(keys) || !keys.length) return raw;
+    const pattern = new RegExp(`("(?:${keys.join('|')})"\\s*:\\s*)(\\d{16,})`, 'g');
+    return raw.replace(pattern, '$1"$2"');
+}
 // 签名对 query 字节级敏感：python urllib.parse.quote 的 ['!'*'()'] 兜底编码行为须保持一致
 function pythonUrlEncode(values) {
     return Object.entries(values).map(([key, value]) => {
@@ -449,7 +457,7 @@ async function requestJson(url, options, deadline, signal) {
                 ? 'App 片源请求超时' : 'App 片源网络请求失败，请稍后重试'), { code, requestId });
         }
         const raw = typeof response.data === 'string' ? response.data : '';
-        const parsed = typeof response.data === 'string' ? jsonBody(raw) : response.data;
+        const parsed = typeof response.data === 'string' ? jsonBody(guardJsonIdKeys(raw, options.jsonGuardKeys)) : response.data;
         const businessCode = Number(parsed?.Code ?? parsed?.code ?? parsed?.status_code ?? 0);
         const outcome = response.status !== 200 ? `HTTP_${response.status}` : !raw.trim() && typeof response.data === 'string'
             ? 'EMPTY_RESPONSE' : !parsed || typeof parsed !== 'object' ? 'INVALID_RESPONSE'

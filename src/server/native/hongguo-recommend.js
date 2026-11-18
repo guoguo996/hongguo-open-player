@@ -112,8 +112,10 @@ async function fetchBatch() {
     values.filter_ids = [...state.seen].slice(-FILTER_IDS_LIMIT).join(',');
   }
   const signed = signedMetadataRequest(flow ? CELL_API : TAB_API, values);
+  // feed 响应里 series_id/book_id/vid 是 19 位数字字面量，必须防精度丢失（丢精度会变成 ...000，查分集必 404）
   const payload = await requestJson(signed.url, {
-    method: 'GET', headers: signed.headers, maxContentLength: FEED_RESPONSE_LIMIT
+    method: 'GET', headers: signed.headers, maxContentLength: FEED_RESPONSE_LIMIT,
+    jsonGuardKeys: ['series_id', 'book_id', 'vid', 'item_id'],
   }, Date.now() + TIMEOUT_MS);
   const parsed = parseFeed(payload);
   state.session = parsed.session || state.session;

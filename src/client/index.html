@@ -135,7 +135,7 @@
     <!-- 主体内容区域 -->
     <main class="app-main">
       <!-- 快捷搜索推荐标签 -->
-      <section v-if="viewMode === 'catalog' && !isCloudTab && currentTab !== 'history' && currentTab !== 'favorites' && currentTab !== 'recommend'" class="chips-bar">
+      <section v-if="viewMode === 'catalog' && !isCloudTab && currentTab !== 'history' && currentTab !== 'recommend'" class="chips-bar">
         <span class="chips-label">热门搜索：</span>
         <button v-for="tag in hotTags" :key="tag" class="chip-item" @click="quickSearch(tag)">{{ tag }}</button>
       </section>
@@ -152,10 +152,13 @@
           <button class="retry-btn" @click="loadRecommend" style="margin-top: 14px; padding: 8px 20px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.2); background: rgba(255,255,255,0.08); color: #fff; cursor: pointer;">重试</button>
         </div>
         <div v-else-if="recommendItem" class="recommend-card" :class="{ switching: loadingRecommend }">
-          <div class="recommend-cover-wrapper" @click="openTheater(recommendItem)" role="button" tabindex="0" @keydown.enter="openTheater(recommendItem)">
-            <img :src="recommendItem.cover" :alt="recommendItem.series_title" class="recommend-cover" @error="onImageError" />
-            <div class="cover-overlay"><span class="play-badge">▶ 立即播放</span></div>
-            <span class="episode-badge">{{ recommendItem.episode_count ? `全 ${recommendItem.episode_count} 集` : '短剧' }}</span>
+          <div class="recommend-cover-wrapper recommend-preview" @click="toggleRecommendPlay" role="button" tabindex="0" @keydown.enter="toggleRecommendPlay" aria-label="播放或暂停推荐预览">
+            <video v-if="recommendStreamUrl" ref="recommendVideoEl" :key="recommendStreamUrl" class="recommend-video" :src="recommendStreamUrl" playsinline autoplay preload="auto" @play="recommendPlaying = true" @pause="recommendPlaying = false" @waiting="recommendBuffering = true" @playing="recommendBuffering = false" @ended="onRecommendEnded" @error="onRecommendPreviewError"></video>
+            <div v-else class="recommend-cover-fallback" :style="{ backgroundImage: `url('${recommendItem.cover}')` }"></div>
+            <div v-if="recommendBuffering && recommendStreamUrl" class="recommend-buffering"><div class="spinner"></div></div>
+            <div v-else-if="recommendStreamUrl && !recommendPlaying" class="recommend-pause-overlay"><span class="recommend-pause-icon">▶</span></div>
+            <span class="episode-badge">第 {{ recommendEpIndex }} 集 / 全 {{ recommendDetail?.total || recommendItem.episode_count || '?' }} 集</span>
+            <button class="recommend-full-btn" @click.stop="watchRecommendFull" title="进入完整播放页（进度条 / 选集 / 倍速等完整功能）">📺 观看完整视频</button>
           </div>
           <div class="recommend-info">
             <h3 class="recommend-title" :title="recommendItem.series_title">{{ recommendItem.series_title }}</h3>
@@ -164,10 +167,9 @@
             </div>
             <p v-if="recommendItem.description" class="recommend-desc">{{ recommendItem.description }}</p>
             <div class="recommend-actions">
-              <button class="recommend-play-btn" @click="openTheater(recommendItem)">▶ 立即播放</button>
               <button class="recommend-next-btn" :disabled="loadingRecommend" @click="loadRecommend">{{ loadingRecommend ? '加载中…' : '🔄 换一个' }}</button>
             </div>
-            <p class="recommend-hint">点击「换一个」或滚动鼠标滚轮，推荐另一部短剧</p>
+            <p class="recommend-hint">点击画面暂停 / 播放；滚轮或「换一个」切换推荐</p>
             <p v-if="recommendError" class="recommend-error-tip">{{ recommendError }}</p>
           </div>
         </div>
@@ -257,8 +259,8 @@
         <!-- 列表空状态 -->
         <div v-else-if="currentDramas.length === 0" class="empty-state">
           <span class="empty-icon">📺</span>
-          <h3>{{ currentTab === 'history' ? '暂无观看历史' : currentTab === 'favorites' ? '暂无收藏短剧' : '暂无相关短剧内容' }}</h3>
-          <p>{{ currentTab === 'history' ? '播放过的短剧会显示在这里' : currentTab === 'favorites' ? '点击短剧海报旁的“收藏”即可快速添加' : currentTab === 'search' ? '未找到相关短剧，换个搜索关键词试试吧' : '换个搜索关键词，或者切换分类标签试试吧' }}</p>
+          <h3>{{ currentTab === 'history' ? '暂无观看历史' : '暂无相关短剧内容' }}</h3>
+          <p>{{ currentTab === 'history' ? '播放过的短剧会显示在这里' : currentTab === 'search' ? '未找到相关短剧，换个搜索关键词试试吧' : '换个搜索关键词，或者切换分类标签试试吧' }}</p>
         </div>
 
         <!-- 卡片网格 -->
@@ -288,7 +290,7 @@
         </div>
 
         <!-- 分页控制器 -->
-        <div v-if="(currentDramas.length > 0 || currentPage > 1) && currentTab !== 'history' && currentTab !== 'favorites'" class="pagination-bar">
+        <div v-if="(currentDramas.length > 0 || currentPage > 1) && currentTab !== 'history'" class="pagination-bar">
           <button :disabled="currentPage <= 1 || loadingCatalog" class="page-btn" @click="changePage(-1)">上一页</button>
           <span class="page-indicator">第 {{ currentPage }} 页</span>
           <button :disabled="loadingCatalog || !hasMore" class="page-btn" @click="changePage(1)">下一页</button>
@@ -307,10 +309,7 @@
               <span class="playing-ep-badge">第 {{ activeEpisodeIndex }} 集 / 全 {{ activeSeries?.total || activeEpisodes.length }} 集</span>
             </div>
             <div class="player-actions">
-              <button v-if="currentTab === 'recommend'" class="recommend-switch-btn" :disabled="loadingRecommend" @click="loadRecommend" title="换一部推荐并直接播放（滚轮同效）">{{ loadingRecommend ? '加载中…' : '🔄 换一个' }}</button>
-              <button class="fav-action-btn" :class="{ favorited: isFavorited }" @click="toggleFavCurrent" :title="isFavorited ? '取消收藏' : '收藏此剧'">
-                {{ isFavorited ? '❤️ 已收藏' : '🤍 收藏' }}
-              </button>
+              <button v-if="currentTab === 'recommend'" class="recommend-switch-btn" :disabled="loadingRecommend" @click="loadRecommend({ theater: true })" title="换一部推荐并直接播放（滚轮同效）">{{ loadingRecommend ? '加载中…' : '🔄 换一个' }}</button>
               <button 
                 class="sidebar-toggle-btn" 
                 :class="{ active: sidebarOpen }" 
@@ -474,17 +473,6 @@
         <aside v-show="sidebarOpen" id="episode-sidebar" class="theater-sidebar">
           <!-- 短剧信息头部卡片 (点击弹出剧情详细信息) -->
           <div class="sidebar-drama-header" @click="openDramaDetail" title="点击查看短剧详情与完整剧情介绍" role="button" tabindex="0" @keydown.enter="openDramaDetail">
-            <!-- 右上角收藏小红心按钮 (未点亮🤍 / 点亮❤️) -->
-            <button 
-              class="sidebar-fav-icon-btn" 
-              :class="{ favorited: isFavorited }" 
-              @click.stop="toggleFavCurrent" 
-              :title="isFavorited ? '已收藏此剧 (点击取消)' : '收藏此剧 (点击加入收藏)'"
-              :aria-label="isFavorited ? '已收藏此剧' : '收藏此剧'"
-            >
-              <span class="fav-heart-icon">{{ isFavorited ? '❤️' : '🤍' }}</span>
-            </button>
-
             <div class="sidebar-drama-top">
               <img :src="activeSeries?.cover" class="sidebar-cover" @error="onImageError"/>
               <div class="sidebar-meta">
@@ -714,9 +702,6 @@
                     <span class="copy-btn-text">{{ titleCopied ? '已复制' : '复制剧名' }}</span>
                   </button>
                 </div>
-                <button class="drama-detail-fav-btn" :class="{ favorited: isFavorited }" @click="toggleFavCurrent">
-                  {{ isFavorited ? '❤️ 已在收藏夹' : '🤍 加入收藏' }}
-                </button>
               </div>
               <div class="drama-detail-stats">
                 <span class="detail-count-badge">共 {{ activeEpisodes.length || activeSeries.total }} 集全</span>

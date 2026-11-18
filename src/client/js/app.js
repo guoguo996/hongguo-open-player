@@ -10,7 +10,7 @@ const app = createApp({
   setup() {
     // 视图模式与导航状态
     const viewMode = ref('catalog'); // 'catalog' | 'theater'
-    const currentTab = ref('recommend'); // 'recommend' | 'hot-drama' | 'real-drama' | 'comic-drama' | 'history' | 'favorites' | 'search'
+    const currentTab = ref('recommend'); // 'recommend' | 'hot-drama' | 'real-drama' | 'comic-drama' | 'history' | 'search'
     const searchKeyword = ref('');
     const searchHistory = ref([]);
     const showSearchHistory = ref(false);
@@ -27,10 +27,16 @@ const app = createApp({
     let catalogRequest = 0;
     let submittedKeyword = '';
 
-    // 首页推荐（单剧卡片，按钮/滚轮换一个）
+    // 首页推荐（红果式：页内预览自动播放，点画面播放/暂停，滚轮换一部，「观看完整视频」进剧场）
     const recommendItem = ref(null);
     const loadingRecommend = ref(false);
     const recommendError = ref('');
+    const recommendVideoEl = ref(null);
+    const recommendDetail = ref(null);
+    const recommendEpIndex = ref(1);
+    const recommendStreamUrl = ref('');
+    const recommendPlaying = ref(false);
+    const recommendBuffering = ref(false);
     let recommendRequest = 0;
     let lastRecommendWheelAt = 0;
 
@@ -39,7 +45,6 @@ const app = createApp({
     const activeSeries = ref(null);
     const activeEpisodes = ref([]);
     const activeEpisodeIndex = ref(1);
-    const isFavorited = ref(false);
     const isPlaying = ref(false);
     const isBuffering = ref(false);
     const videoErrorMessage = ref('');
@@ -1372,7 +1377,7 @@ const app = createApp({
         let url;
         if (submittedKeyword) {
           url = `/api/search?keyword=${encodeURIComponent(submittedKeyword)}&page=${currentPage.value}`;
-        } else if (tab === 'history' || tab === 'favorites') {
+        } else if (tab === 'history') {
           url = `/api/${tab}`;
         } else {
           url = `/api/catalog?category=${tab}&page=${currentPage.value}`;
@@ -1401,7 +1406,7 @@ const app = createApp({
     }
 
     // 首页推荐：每次拉一部未看过的推荐剧；按钮与滚轮均触发换一个。
-    async function loadRecommend() {
+    async function loadRecommend(options = {}) {
       const request = ++recommendRequest;
       loadingRecommend.value = true;
       recommendError.value = '';
@@ -1412,8 +1417,9 @@ const app = createApp({
         if (request !== recommendRequest) return;
         if (!data || data.success === false || !data.item) throw new Error(data?.error || '推荐加载失败');
         recommendItem.value = data.item;
-        // 和红果 App 首页推荐一致：拉到即直接进剧场自动播放，而非停在卡片。
-        if (currentTab.value === 'recommend') await openTheater(data.item);
+        // 剧场内（滚轮/换一个）：换一部并直接播放；推荐页内：红果式嵌入预览播放器。
+        if (viewMode.value === 'theater') await openTheater(data.item);
+        else await startRecommendPreview(data.item, request);
       } catch (err) {
         if (request !== recommendRequest) return;
         console.error('加载推荐失败:', err);
@@ -1421,6 +1427,61 @@ const app = createApp({
       } finally {
         if (request === recommendRequest) loadingRecommend.value = false;
       }
+    }
+
+    // 推荐页内嵌预览：取第一集直链自动播放；集播完自动连下一集；「观看完整视频」进剧场。
+    async function startRecommendPreview(item, request) {
+      recommendStreamUrl.value = '';
+      recommendDetail.value = null;
+      recommendPlaying.value = false;
+      recommendBuffering.value = true;
+      try {
+        const detail = await fetch(`/api/series/${encodeURIComponent(item.series_id)}`).then(r => r.json());
+        if (request !== recommendRequest) return;
+        if (!detail || !Array.isArray(detail.episodes) || !detail.episodes.length) {
+          throw new Error(detail?.error || '获取该剧分集失败');
+        }
+        recommendDetail.value = detail;
+        recommendEpIndex.value = detail.episodes[0].vid_index;
+        const params = [];
+        if (!hevcSupported.value) params.push('hevc=0');
+        recommendStreamUrl.value = `/api/stream/${detail.episodes[0].vid}${params.length ? '?' + params.join('&') : ''}`;
+      } catch (err) {
+        if (request !== recommendRequest) return;
+        console.error('推荐预览加载失败:', err);
+        recommendError.value = err.message || '推荐预览加载失败';
+        recommendBuffering.value = false;
+      }
+    }
+
+    function toggleRecommendPlay() {
+      const video = recommendVideoEl.value;
+      if (!video) return;
+      if (video.paused) video.play().catch(() => {});
+      else video.pause();
+    }
+
+    function onRecommendEnded() {
+      const detail = recommendDetail.value;
+      if (!detail) return;
+      const next = detail.episodes.find(e => e.vid_index === recommendEpIndex.value + 1);
+      if (!next) return;
+      const params = [];
+      if (!hevcSupported.value) params.push('hevc=0');
+      recommendEpIndex.value = next.vid_index;
+      recommendBuffering.value = true;
+      recommendStreamUrl.value = `/api/stream/${next.vid}${params.length ? '?' + params.join('&') : ''}`;
+    }
+
+    function onRecommendPreviewError() {
+      recommendBuffering.value = false;
+      if (recommendStreamUrl.value) recommendError.value = '预览播放失败，可点「换一个」换一部';
+    }
+
+    // 「观看完整视频」：进入剧场，从当前预览集开始
+    function watchRecommendFull() {
+      const epIndex = recommendEpIndex.value || 1;
+      openTheater(recommendItem.value, { episodeIndex: epIndex });
     }
 
     // 滚轮换一个：节流避免连续滚动触发过多请求；仅在推荐视图且非加载中时生效。
@@ -1878,7 +1939,6 @@ const app = createApp({
         const watched = detail.saved_progress?.watched_indexes || [detail.saved_progress?.episode_index];
         watchedMap.value.set(detail.series_id, new Set(watched.filter(index => Number.isInteger(index) && index > 0)));
         activeEpisodes.value = detail.episodes;
-        isFavorited.value = !!detail.is_favorite;
 
         // 计算初始选集分组
         const groups = episodeGroups.value;
@@ -1925,7 +1985,7 @@ const app = createApp({
 
     function closeTheater() {
       leaveTheater();
-      if (['history', 'favorites'].includes(currentTab.value)) loadCatalog();
+      if (currentTab.value === 'history') loadCatalog();
       nextTick(() => window.scrollTo?.(0, catalogScrollTop));
     }
 
@@ -1988,7 +2048,7 @@ const app = createApp({
       if (currentTab.value === 'recommend') {
         if (now - lastWheelSwitchAt < 600 || loadingRecommend.value) return;
         lastWheelSwitchAt = now;
-        loadRecommend();
+        loadRecommend({ theater: true });
         return;
       }
       if (now - lastWheelSwitchAt < 400) return; // 触控板惯性滚动防连跳
@@ -2079,40 +2139,6 @@ const app = createApp({
         document.exitFullscreen().catch(console.error);
       }
       keepPlayerFocus();
-    }
-
-    async function toggleFavCurrent() {
-      if (!activeSeries.value) return;
-      try {
-        const res = await fetch('/api/favorites/toggle', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            series_id: activeSeries.value.series_id,
-            series_title: activeSeries.value.series_title,
-            cover: activeSeries.value.cover,
-            episode_count: activeSeries.value.total
-          })
-        }).then(r => r.json());
-        if (res.error) throw new Error(res.error);
-        isFavorited.value = !!res.is_favorite;
-        // 本地收藏同步到红果账号（官方 App 收藏记录可见），与右侧⭐同一写端点。
-        if (account.value.logged_in) {
-          const vid = currentVid();
-          socialState.value.collected = !!res.is_favorite;
-          if (vid) {
-            fetch('/api/account/collect', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ series_id: activeSeries.value.series_id, vid, action: res.is_favorite ? 'collect' : 'uncollect' }),
-            }).catch(() => {});
-          }
-        }
-      } catch (err) {
-        console.error('收藏切换失败:', err);
-        notify('收藏保存失败，请稍后重试');
-      } finally {
-        keepPlayerFocus();
-      }
     }
 
     // ================= 播放器事件回调 =================
@@ -2289,10 +2315,12 @@ const app = createApp({
                 } catch (_) { bytevc2Fallback(); return; }
                 video.play().catch(() => {});
               } else if (errData?.code === 'EMPTY_RESPONSE' || /返回空响应/.test(errData?.error || '')) {
-                videoErrorMessage.value = '上游接口返回空响应，可能是当前设备鉴权受限；请点击右上角菜单中的“生成新的设备ID”后重试';
+                videoErrorMessage.value = '上游接口返回空响应（设备鉴权受限）；正在自动生成新设备ID并重试…';
+                autoResetDeviceAndRetry(errData?.code || 'EMPTY_RESPONSE');
               } else if (errData?.code === 'DEVICE_REGISTRATION_FAILED' || /匿名播放设备注册失败|ERR_NETWORK/i.test(errData?.error || '')) {
-                videoErrorMessage.value = '播放设备注册受阻（ERR_NETWORK）；请检查网络连接、代理软件（Clash/去广告规则）或 DNS 设置';
-                reportClientLog('WARN', '播放器源探测提示: 设备注册受阻（ERR_NETWORK），已展示网络/代理排查指引');
+                videoErrorMessage.value = '播放设备注册受阻（ERR_NETWORK）；正在尝试生成新设备ID…';
+                autoResetDeviceAndRetry(errData?.code || 'DEVICE_REGISTRATION_FAILED');
+                reportClientLog('WARN', '播放器源探测提示: 设备注册受阻（ERR_NETWORK），已尝试自动更换设备ID');
               } else if (errData?.code === 'SECURITY_BLOCKED') {
                 videoErrorMessage.value = '视频源地址未通过安全检查；请切换分集重试';
               } else if (errData?.code === 'UNSUPPORTED_BYTEVC2') {
@@ -2330,6 +2358,36 @@ const app = createApp({
       if (videoEl.value) {
         videoEl.value.load();
         videoEl.value.play().catch(console.error);
+      }
+    }
+
+    // 播放异常自动换设备：上游对当前设备鉴权受限（空响应/设备注册失败）时，
+    // 自动生成新设备ID并重试本集。按「剧集:集数」防循环——同一集只自动重置一次，
+    // 仍失败则提示用户手动处理（网络/代理问题自动重置也救不了）。
+    let autoDeviceResetBusy = false;
+    let autoDeviceResetKey = '';
+    async function autoResetDeviceAndRetry(reason) {
+      const key = `${activeSeries.value?.series_id || ''}:${activeEpisodeIndex.value}`;
+      if (autoDeviceResetBusy || autoDeviceResetKey === key) return;
+      autoDeviceResetBusy = true;
+      autoDeviceResetKey = key;
+      try {
+        showOSD('检测到设备鉴权受限，正在生成新设备ID…');
+        const response = await fetch('/api/device/reset', { method: 'POST' });
+        const data = await response.json().catch(() => null);
+        if (data?.success && data?.device?.device_id) {
+          currentDeviceId.value = data.device.device_id;
+          reportClientLog('WARN', `播放异常自动生成新设备ID (${reason}): ${data.device.device_id}`);
+          showOSD(`已生成新设备ID，正在重试第 ${activeEpisodeIndex.value} 集…`);
+          retryCurrentEpisode();
+        } else {
+          videoErrorMessage.value = data?.error || '自动生成新设备ID失败；请检查网络/代理设置，或点击右上角菜单中的“生成新的设备ID”后重试';
+        }
+      } catch (err) {
+        console.error('自动生成新设备ID失败:', err);
+        videoErrorMessage.value = '自动生成新设备ID失败；请检查网络/代理设置，或点击右上角菜单中的“生成新的设备ID”后重试';
+      } finally {
+        autoDeviceResetBusy = false;
       }
     }
 
@@ -2611,11 +2669,20 @@ const app = createApp({
       recommendItem,
       loadingRecommend,
       recommendError,
+      recommendVideoEl,
+      recommendDetail,
+      recommendEpIndex,
+      recommendStreamUrl,
+      recommendPlaying,
+      recommendBuffering,
+      toggleRecommendPlay,
+      onRecommendEnded,
+      onRecommendPreviewError,
+      watchRecommendFull,
       videoEl,
       activeSeries,
       activeEpisodes,
       activeEpisodeIndex,
-      isFavorited,
       isPlaying,
       isBuffering,
       videoErrorMessage,
@@ -2654,7 +2721,6 @@ const app = createApp({
       fitMode,
       toggleFitMode,
       handleVideoClick,
-      toggleFavCurrent,
       onPlay,
       onPause,
       onCanPlay,

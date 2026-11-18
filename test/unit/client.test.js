@@ -21,7 +21,7 @@ test('late catalog responses cannot replace the active tab; search pagination ke
   const requests = [];
   const state = client(url => url === '/api/search-history' ? Promise.resolve(response([])) : new Promise(resolve => requests.push({ url, resolve })));
   const first = state.loadCatalog();
-  state.switchTab('favorites');
+  state.switchTab('history');
   requests[1].resolve(response([{ series_id: '2' }]));
   await new Promise(resolve => setImmediate(resolve));
   requests[0].resolve(response({ results: [{ series_id: '1' }] }));
@@ -36,7 +36,7 @@ test('late catalog responses cannot replace the active tab; search pagination ke
   requests[3].resolve(response({ results: [], hasMore: false }));
 });
 
-test('recommend auto-plays in theater; wheel switches to next recommendation', async () => {
+test('recommend previews in catalog; theater wheel switches to next recommendation', async () => {
   const requests = [];
   let n = 0;
   const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -48,12 +48,15 @@ test('recommend auto-plays in theater; wheel switches to next recommendation', a
   });
   await state.loadRecommend();
   assert.equal(state.recommendItem.value.series_id, '1');
-  assert.equal(state.viewMode.value, 'theater', 'recommend should directly enter playback');
-  assert.equal(state.activeSeries.value.series_id, '1');
+  assert.equal(state.viewMode.value, 'catalog', '推荐页内嵌预览播放，不直接进剧场');
+  assert.equal(state.recommendDetail.value.series_id, '1');
+  assert.equal(state.recommendStreamUrl.value, '/api/stream/v1');
   // 剧场滚轮 = 换一部推荐并直接播放
+  state.viewMode.value = 'theater';
   state.handlePlayerWheel({ deltaY: 120 });
   await tick(); await tick();
   assert.equal(state.recommendItem.value.series_id, '2');
+  assert.equal(state.activeSeries.value.series_id, '2');
   const count = requests.filter(u => u === '/api/recommend/next').length;
   // 节流内的第二次滚动不再发请求
   state.handlePlayerWheel({ deltaY: 120 });
@@ -61,7 +64,7 @@ test('recommend auto-plays in theater; wheel switches to next recommendation', a
   assert.equal(requests.filter(u => u === '/api/recommend/next').length, count);
 });
 
-test('switchTab recommend routes to the recommend endpoint and plays, not catalog', async () => {
+test('switchTab recommend routes to the recommend endpoint with in-page preview, not catalog or theater', async () => {
   const requests = [];
   const state = client(async url => {
     requests.push(url);
@@ -75,13 +78,14 @@ test('switchTab recommend routes to the recommend endpoint and plays, not catalo
   assert.equal(state.currentTab.value, 'recommend');
   assert.ok(requests.includes('/api/recommend/next'));
   assert.ok(!requests.some(u => u.startsWith('/api/catalog')));
-  assert.equal(state.viewMode.value, 'theater');
+  assert.equal(state.viewMode.value, 'catalog', '推荐 tab 页内预览播放，不进剧场');
+  assert.equal(state.recommendStreamUrl.value, '/api/stream/v1');
 });
 
 module.exports = { client, response };
 
 test('search from saved lists enters search mode and keeps paging independent of draft input', async () => {
-  for (const tab of ['history', 'favorites']) {
+  for (const tab of ['history']) {
     const requests = [];
     const state = client(async url => {
       requests.push(url);
@@ -140,16 +144,6 @@ test('a pending drama detail cannot reopen theater after navigating away', async
   resolveDetail(response({ series_id: '1', episodes: [{ vid: '1', vid_index: 1 }] }));
   await opening;
   assert.equal(state.viewMode.value, 'catalog');
-});
-
-test('favoriting a long series sends metadata without its full episode list', async () => {
-  let body;
-  const state = client(async (url, options) => { body = JSON.parse(options.body); return response({ is_favorite: true }); });
-  state.activeSeries.value = { series_id: '123', total: 1000, episodes: Array(1000).fill({ title: 'x'.repeat(1000) }) };
-  await state.toggleFavCurrent();
-  assert.equal(body.episode_count, 1000);
-  assert.equal(body.episodes, undefined);
-  assert.ok(JSON.stringify(body).length < 1024);
 });
 
 test('fullscreen Escape preserves theater and select keys do not switch episodes', () => {
@@ -446,16 +440,14 @@ test('theater sidebar toggle button toggles state and updates responsive button 
   assert.equal(state.sidebarOpen.value, true);
 });
 
-test('index.html layout places favorite button to the left of sidebar-toggle-btn with state icons', () => {
+test('index.html layout places sidebar-toggle-btn in player actions without local favorite', () => {
   const path = require('node:path');
   const html = fs.readFileSync(path.resolve(__dirname, '../../src/client/index.html'), 'utf-8');
   assert.ok(html.includes('class="player-actions"'));
-  
-  const favIndex = html.indexOf('class="fav-action-btn"');
-  const toggleIndex = html.indexOf('class="sidebar-toggle-btn"');
-  assert.ok(favIndex !== -1 && toggleIndex !== -1, 'Both buttons must exist');
-  assert.ok(favIndex < toggleIndex, 'Favorite button must be on the left, sidebar toggle on the right');
-  
+  assert.ok(html.includes('class="sidebar-toggle-btn"'));
+  assert.ok(!html.includes('fav-action-btn'), 'Local favorite button must be removed');
+  assert.ok(!html.includes('toggleFavCurrent'), 'Local favorite handler must be removed');
+
   assert.ok(html.includes('sidebar-toggle-icon'));
   assert.ok(html.includes("sidebarOpen ? '隐藏侧边栏' : '显示侧边栏'"));
 });
@@ -493,11 +485,11 @@ test('drama detail modal state opens on openDramaDetail and closes on Escape/clo
   assert.equal(state.showDramaDetailModal.value, false);
 });
 
-test('index.html includes sidebar drama header with fav heart icon button and drama detail modal', () => {
+test('index.html includes sidebar drama header and drama detail modal without heart favorite', () => {
   const path = require('node:path');
   const html = fs.readFileSync(path.resolve(__dirname, '../../src/client/index.html'), 'utf-8');
-  assert.ok(html.includes('class="sidebar-fav-icon-btn"'), 'Heart icon button in top right must exist');
-  assert.ok(html.includes('class="fav-heart-icon"'), 'Heart icon must exist');
+  assert.ok(!html.includes('sidebar-fav-icon-btn'), 'Heart icon button must be removed');
+  assert.ok(!html.includes('fav-heart-icon'), 'Heart icon must be removed');
   assert.ok(html.includes('class="sidebar-intro-preview"'), 'Intro preview in sidebar header must exist');
   assert.ok(html.includes('class="drama-modal-overlay"'), 'Drama detail modal overlay must exist');
   assert.ok(html.includes('class="drama-modal"'), 'Drama modal dialog must exist');
@@ -588,11 +580,11 @@ test('resetDevice triggers POST /api/device/reset and updates currentDeviceId', 
   assert.equal(state.showAppMenu.value, false);
 });
 
-test('onVideoError probes stream endpoint on code 4 and displays device registration failure hint', async () => {
-  const probeRequests = [];
+test('onVideoError probes stream endpoint on code 4 and auto-regenerates device on registration failure', async () => {
+  const requests = [];
   const state = client(async (url, options) => {
+    requests.push({ url, options, method: options?.method || 'GET' });
     if (url.startsWith('/api/stream/')) {
-      probeRequests.push({ url, options });
       return {
         ok: false,
         status: 500,
@@ -602,7 +594,7 @@ test('onVideoError probes stream endpoint on code 4 and displays device registra
         })
       };
     }
-    return response({ results: [] });
+    return response({ success: false });
   });
 
   state.activeSeries.value = { series_id: '1', series_title: '测试短剧' };
@@ -614,11 +606,46 @@ test('onVideoError probes stream endpoint on code 4 and displays device registra
 
   await state.onVideoError();
 
-  assert.equal(probeRequests.length, 1);
-  assert.match(probeRequests[0].url, /\/api\/stream\/vid-123/);
-  assert.equal(probeRequests[0].options?.headers?.Range, 'bytes=0-0');
+  const probe = requests.find(r => r.url.startsWith('/api/stream/'));
+  assert.equal(requests.filter(r => r.url.startsWith('/api/stream/')).length, 1);
+  assert.match(probe.url, /\/api\/stream\/vid-123/);
+  assert.equal(probe.options?.headers?.Range, 'bytes=0-0');
   assert.match(state.videoErrorMessage.value, /播放设备注册受阻（ERR_NETWORK）/);
-  assert.match(state.videoErrorMessage.value, /Clash\/去广告规则/);
+  // 设备注册受阻：自动生成新设备ID（重置失败时给出手动指引）
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(requests.some(r => r.url === '/api/device/reset' && r.method === 'POST'), '应自动调用设备重置');
+  assert.match(state.videoErrorMessage.value, /自动生成新设备ID失败/);
+});
+
+test('onVideoError auto-regenerates device ID and retries once when upstream returns EMPTY_RESPONSE', async () => {
+  const requests = [];
+  const state = client(async (url, options) => {
+    requests.push({ url, method: options?.method || 'GET' });
+    if (url.startsWith('/api/stream/')) {
+      return { ok: false, status: 500, json: async () => ({ code: 'EMPTY_RESPONSE', error: 'App 接口返回空响应，可能是签名或设备鉴权问题' }) };
+    }
+    if (url === '/api/device/reset') return response({ success: true, device: { device_id: 'new-dev-1' } });
+    return response({});
+  });
+  state.activeSeries.value = { series_id: '1', series_title: '测试短剧' };
+  state.activeEpisodes.value = [{ vid: '123', vid_index: 1 }, { vid: '456', vid_index: 2 }];
+  state.activeEpisodeIndex.value = 1;
+  state.videoEl.value = { error: { code: 4, message: 'Format error' }, load() {}, play: async () => {} };
+  await state.onVideoError();
+  assert.match(state.videoErrorMessage.value, /返回空响应/);
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+  // 自动重置成功：调用重置接口、更新设备ID、重试本集（清空错误提示）
+  assert.ok(requests.some(r => r.url === '/api/device/reset' && r.method === 'POST'));
+  assert.equal(state.currentDeviceId.value, 'new-dev-1');
+  assert.equal(state.videoErrorMessage.value, '');
+  // 同一集只自动重置一次：再次出错不再调重置接口
+  const resetCalls = requests.filter(r => r.url === '/api/device/reset').length;
+  state.videoEl.value.error = { code: 4, message: 'Format error' };
+  await state.onVideoError();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests.filter(r => r.url === '/api/device/reset').length, resetCalls);
 });
 
 test('onVideoError displays an unsupported ByteVC2 message', async () => {
@@ -631,19 +658,6 @@ test('onVideoError displays an unsupported ByteVC2 message', async () => {
   state.videoEl.value = { error: { code: 4, message: 'Format error' } };
   await state.onVideoError();
   assert.equal(state.videoErrorMessage.value, '本集使用 ByteVC2 编码，当前播放器暂不支持');
-});
-
-test('onVideoError guides user to regenerate device ID when upstream returns EMPTY_RESPONSE', async () => {
-  const state = client(async url => url.startsWith('/api/stream/')
-    ? { ok: false, status: 500, json: async () => ({ code: 'EMPTY_RESPONSE', error: 'App 接口返回空响应，可能是签名或设备鉴权问题' }) }
-    : response({}));
-  state.activeSeries.value = { series_id: '1', series_title: '测试短剧' };
-  state.activeEpisodes.value = [{ vid: '123', vid_index: 1 }];
-  state.activeEpisodeIndex.value = 1;
-  state.videoEl.value = { error: { code: 4, message: 'Format error' } };
-  await state.onVideoError();
-  assert.match(state.videoErrorMessage.value, /返回空响应/);
-  assert.match(state.videoErrorMessage.value, /生成新的设备ID/);
 });
 
 test('ByteVC2 progressive playback starts on detection and stops on switching episodes', async () => {

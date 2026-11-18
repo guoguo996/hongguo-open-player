@@ -151,8 +151,8 @@ async function runTests() {
     console.log(`     HTTP 206 Range 分片分段响应: 正常 (bytes 0-1023/${totalBytes})`);
     console.log(`     标准 MP4 ftyp 容器标识: 校验成功\n`);
 
-    // 7. 验证进度记录与收藏夹持久化
-    console.log('▶ [7/7] 验证用户播放进度记录与收藏持久化...');
+    // 7. 验证进度记录本地持久化
+    console.log('▶ [7/7] 验证用户播放进度记录本地持久化...');
     const progressPayload = {
       series_id: seriesId,
       series_title: seriesData.series_title,
@@ -171,21 +171,7 @@ async function runTests() {
     assert.strictEqual(histItem.episode_index, 4);
     assert.strictEqual(histItem.position_sec, 45.5);
 
-    const favoritePayload = { series_id: seriesId, series_title: seriesData.series_title, cover: seriesData.cover, episode_count: seriesData.total };
-    // 收藏切换验证 (保证测试幂等性)
-    const initialFavRes = await client.get(`${BASE_URL}/api/favorites`);
-    const initiallyFav = (initialFavRes.data || []).some(f => f.series_id === seriesId);
-    if (initiallyFav) {
-      await client.post(`${BASE_URL}/api/favorites/toggle`, favoritePayload); // 先取消
-    }
-    const toggleRes = await client.post(`${BASE_URL}/api/favorites/toggle`, favoritePayload); // 重新收藏
-    assert.strictEqual(toggleRes.status, 200);
-    assert.strictEqual(toggleRes.data.is_favorite, true);
-
-    const favRes = await client.get(`${BASE_URL}/api/favorites`);
-    const isFav = (favRes.data || []).some(f => f.series_id === seriesId);
-    assert(isFav, '收藏夹中应包含该短剧');
-    console.log(`  ✅ 用户观影进度与收藏数据本地持久化读写校验成功\n`);
+    console.log(`  ✅ 用户观影进度本地持久化读写校验成功\n`);
 
     console.log('======================================================');
     console.log('🎉 所有 7 项全流程测试全部成功通过！');
