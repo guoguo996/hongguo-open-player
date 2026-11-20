@@ -1431,6 +1431,7 @@ const app = createApp({
 
     // 推荐页内嵌预览：取第一集直链自动播放；集播完自动连下一集；「观看完整视频」进剧场。
     async function startRecommendPreview(item, request) {
+      stopRecommendBytevc2(); // 换剧前停掉旧流式会话
       recommendStreamUrl.value = '';
       recommendDetail.value = null;
       recommendPlaying.value = false;
@@ -1443,7 +1444,11 @@ const app = createApp({
         }
         recommendDetail.value = detail;
         recommendEpIndex.value = detail.episodes[0].vid_index;
+        recommendPreviewRetries = 0; // 新剧重置重试计数
         const params = [];
+        // 与剧场一致走 ByteVC2 分片流式（mse=1）：边转码边播首帧秒开；
+        // 直链必须等「全集解密+转码」完成（实测 20~30 秒）才返回首字节。
+        if (window.Bytevc2Stream?.supported()) params.push('mse=1');
         if (!hevcSupported.value) params.push('hevc=0');
         recommendStreamUrl.value = `/api/stream/${detail.episodes[0].vid}${params.length ? '?' + params.join('&') : ''}`;
       } catch (err) {
@@ -1467,20 +1472,77 @@ const app = createApp({
       const next = detail.episodes.find(e => e.vid_index === recommendEpIndex.value + 1);
       if (!next) return;
       const params = [];
+      if (window.Bytevc2Stream?.supported()) params.push('mse=1');
       if (!hevcSupported.value) params.push('hevc=0');
       recommendEpIndex.value = next.vid_index;
+      recommendPreviewRetries = 0; // 新集重置重试计数
       recommendBuffering.value = true;
+      stopRecommendBytevc2(); // 旧会话绑定的是将被替换的 video 元素，必须先停
       recommendStreamUrl.value = `/api/stream/${next.vid}${params.length ? '?' + params.join('&') : ''}`;
     }
 
-    function onRecommendPreviewError() {
+    // 预览 ByteVC2 会话与剧场共用同一组变量（预览与剧场不会同时播放）：
+    // 进剧场 / 换剧 / 换集时必须先停旧会话，否则剧场的错误处理会误走 fallback。
+    function stopRecommendBytevc2() {
+      bytevc2Session?.stop();
+      bytevc2Session = null;
+      bytevc2Fallback = null;
+      bytevc2FallbackActive = false;
+    }
+
+    // 预览 video error：mse=1 时 error 是预期流程——探测 ByteVC2 元数据并启动
+    // 分片流式会话（首帧秒开）；其他失败（503 槽位过载等）自动重试最多 2 次。
+    let recommendPreviewRetries = 0;
+    async function onRecommendPreviewError() {
+      const video = recommendVideoEl.value;
+      const streamUrl = recommendStreamUrl.value;
+      if (!video || !streamUrl) return;
+      recommendBuffering.value = true;
+      try {
+        const probe = await fetch(streamUrl, { headers: { Range: 'bytes=0-0' } });
+        const errData = await probe.json().catch(() => null);
+        if (recommendStreamUrl.value !== streamUrl) return;
+        if (errData?.code === 'BYTEVC2_PROGRESSIVE' && window.Bytevc2Stream?.supported() && Number(errData.duration) > 0) {
+          bytevc2Fallback = () => {
+            if (video !== recommendVideoEl.value || recommendStreamUrl.value !== streamUrl) return;
+            reportClientLog('WARN', '预览 ByteVC2 分片播放失败，回退至完整转换');
+            bytevc2Session?.stop();
+            bytevc2Session = null;
+            bytevc2Fallback = null;
+            bytevc2FallbackActive = true;
+            video.src = streamUrl.replace(/([?&])mse=1(?=&|$)/, '$1mse=buffered');
+            video.load();
+            video.play().catch(() => {});
+          };
+          bytevc2Session?.stop();
+          bytevc2Session = window.Bytevc2Stream.start(
+            video,
+            streamUrl.replace(/([?&])mse=1(?=&|$)/, '$1mse=stream'),
+            Number(errData.duration),
+            bytevc2Fallback,
+          );
+          video.play().catch(() => {});
+          return;
+        }
+      } catch (_) { /* 探测失败走下方重试 */ }
       recommendBuffering.value = false;
-      if (recommendStreamUrl.value) recommendError.value = '预览播放失败，可点「换一个」换一部';
+      if (video && recommendStreamUrl.value && recommendPreviewRetries < 2) {
+        recommendPreviewRetries++;
+        recommendBuffering.value = true;
+        setTimeout(() => {
+          if (!recommendStreamUrl.value || !recommendVideoEl.value) return;
+          recommendVideoEl.value.load();
+          recommendVideoEl.value.play().catch(() => {});
+        }, 1200);
+        return;
+      }
+      recommendError.value = '预览播放失败，可点「换一个」换一部';
     }
 
     // 「观看完整视频」：进入剧场，从当前预览集开始
     function watchRecommendFull() {
       const epIndex = recommendEpIndex.value || 1;
+      stopRecommendBytevc2(); // 预览会话绑定的是预览 video 元素，进剧场前必须停
       openTheater(recommendItem.value, { episodeIndex: epIndex });
     }
 
@@ -2230,6 +2292,7 @@ const app = createApp({
     function onTimeUpdate(event) {
       if (isScrubbing.value) return;
       if (event && event.target !== videoEl.value) return;
+      if (autoStreamRetryCount) autoStreamRetryCount = 0; // 播放恢复正常，清零自动重试计数
       if (videoEl.value) {
         currentTime.value = videoEl.value.currentTime || 0;
         const rate = Number(videoEl.value.playbackRate) || 1;
@@ -2331,6 +2394,10 @@ const app = createApp({
                 videoErrorMessage.value = errData.error || 'ByteVC2 视频转换失败，请重试';
               } else if (errData?.error) {
                 videoErrorMessage.value = `${errData.error}；请检查网络或重试切换分集`;
+                tryAutoStreamRetry(); // 转码失败等暂时性错误：自动重试
+              } else if (activeEpisodeIndex.value === currentEpIndex && currentStreamUrl.value === streamUrl) {
+                // 探测返回 503（流槽位过载）等非 JSON 错误体：暂时性失败，自动重试本集
+                tryAutoStreamRetry();
               }
             } else if (probeRes.ok && activeEpisodeIndex.value === currentEpIndex) {
               reportClientLog('ERROR', `播放器解码/渲染报错: code=${code}, message=${message}`);
@@ -2359,6 +2426,19 @@ const app = createApp({
         videoEl.value.load();
         videoEl.value.play().catch(console.error);
       }
+    }
+
+    // 暂时性播放失败（503 流槽位过载 / 上游转码抖动等）自动重试本集，最多 2 次；
+    // 播放恢复（时间更新走动）后计数清零。确定性失败（编码不支持等）不重试。
+    let autoStreamRetryCount = 0;
+    function tryAutoStreamRetry() {
+      if (autoStreamRetryCount >= 2) return;
+      autoStreamRetryCount++;
+      isBuffering.value = true;
+      showOSD(`播放失败，正在自动重试（${autoStreamRetryCount}/2）…`);
+      setTimeout(() => {
+        if (viewMode.value === 'theater') retryCurrentEpisode();
+      }, 1500);
     }
 
     // 播放异常自动换设备：上游对当前设备鉴权受限（空响应/设备注册失败）时，
