@@ -544,6 +544,7 @@ const FRESH_DEVICE_RETRY_DELAY_MS = 1500;
 // RATE_LIMIT_COOLDOWN 长退避后自动恢复；换新设备（新身份）不继承冷却。
 const PLAYBACK_COOLDOWN_MS = 60000;
 const playbackCooldownByDevKey = new Map();
+let lastPoolRotateAt = 0;
 function inPlaybackCooldown(devKey) {
     return (playbackCooldownByDevKey.get(devKey) || 0) > Date.now();
 }
@@ -553,6 +554,13 @@ function markPlaybackCooldown(devKey) {
     while (playbackCooldownByDevKey.size > 32) {
         playbackCooldownByDevKey.delete(playbackCooldownByDevKey.keys().next().value);
     }
+}
+// 冷却标记时从设备池轮换到“有成功取流历史”的老设备（上游已信任过的身份，
+// 比注册全新设备可靠得多）；5 分钟内最多轮换一次，防止池内候选连环失败形成轮换风暴。
+function tryRotateToPooledDevice() {
+    if (Date.now() - lastPoolRotateAt < 5 * 60 * 1000) return null;
+    lastPoolRotateAt = Date.now();
+    return getPlaybackDevice.rotateToPooledDevice();
 }
 
 function clearEntryCache(vid) {
@@ -892,6 +900,10 @@ async function resolveUpstreamEntry(vid, batch, refresh, callerSignal) {
             // 标记冷却并以冷却错误返回：客户端收到 RATE_LIMIT_COOLDOWN 会走长退避
             // 而不触发“空响应自动换设备”——避免零信任的新设备绕过熔断继续风暴。
             markPlaybackCooldown(devKey);
+            // 同步尝试设备池轮换：切到历史可用设备后，退避重试将以新身份（无冷却）
+            // 直连上游，若该设备已被放行则直接恢复播放。
+            const rotated = tryRotateToPooledDevice();
+            if (rotated) logger.info('AppSource', `已轮换至设备池历史可用设备 device_id=${rotated.device_id}，退避后将以新身份重试`);
             throw Object.assign(new Error('上游风控冷却中，稍后自动恢复'), { code: 'RATE_LIMIT_COOLDOWN', status: 503 });
         }
 
