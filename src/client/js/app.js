@@ -2447,7 +2447,9 @@ const app = createApp({
     // 服务端风控熔断（RATE_LIMIT_COOLDOWN，冷却 60 秒）：10 秒长退避重试，最多 8 次
     // （覆盖超过冷却窗口）；不消耗常规重试计数，播放恢复（时间更新走动）后一并清零。
     let cooldownRetryCount = 0;
+    let lastCooldownAt = 0;
     function tryCooldownRetry() {
+      lastCooldownAt = Date.now();
       if (cooldownRetryCount >= 8) {
         isBuffering.value = false;
         videoErrorMessage.value = '上游风控冷却超时；请点击“重试本集”或稍后再试';
@@ -2464,9 +2466,16 @@ const app = createApp({
     // 播放异常自动换设备：上游对当前设备鉴权受限（空响应/设备注册失败）时，
     // 自动生成新设备ID并重试本集。按「剧集:集数」防循环——同一集只自动重置一次，
     // 仍失败则提示用户手动处理（网络/代理问题自动重置也救不了）。
+    // 风控冷却期及其后 10 分钟内禁用：新设备是零信任身份，上游对新设备取流更严，
+    // 且换设备会绕过熔断冷却继续风暴；应走冷却长退避等待上游放行。
     let autoDeviceResetBusy = false;
     let autoDeviceResetKey = '';
     async function autoResetDeviceAndRetry(reason) {
+      if (Date.now() - lastCooldownAt < 10 * 60 * 1000) {
+        reportClientLog('WARN', `冷却期内抑制自动换设备 (${reason})，改走冷却退避`);
+        tryCooldownRetry();
+        return;
+      }
       const key = `${activeSeries.value?.series_id || ''}:${activeEpisodeIndex.value}`;
       if (autoDeviceResetBusy || autoDeviceResetKey === key) return;
       autoDeviceResetBusy = true;

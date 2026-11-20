@@ -511,7 +511,8 @@ test('all-empty playback marks cooldown; next fetch fast-fails without hitting u
   };
   try {
     // 第一次：全链（multi+shortplay+tab，含新设备同步重试段）空响应 → 标记冷却
-    await assert.rejects(appSource.fetchAppPlayUrl('40010'), { code: 'EMPTY_RESPONSE' });
+    // 并直接以 RATE_LIMIT_COOLDOWN 返回，客户端据此不再触发自动换设备
+    await assert.rejects(appSource.fetchAppPlayUrl('40010'), { code: 'RATE_LIMIT_COOLDOWN' });
     const afterFirst = upstreamCalls;
     // 第二次：冷却期内直接快速失败，不再打上游
     await assert.rejects(appSource.fetchAppPlayUrl('40010', { refresh: true }), { code: 'RATE_LIMIT_COOLDOWN' });

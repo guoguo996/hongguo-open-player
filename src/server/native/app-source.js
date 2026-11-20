@@ -889,7 +889,10 @@ async function resolveUpstreamEntry(vid, batch, refresh, callerSignal) {
             // 任一通道成功即撤销冷却：冷却只是限频窗口的保守估计，上游恢复后不应残留。
             playbackCooldownByDevKey.delete(devKey);
         } else if (result.allEmpty && result.lastError?.code === 'EMPTY_RESPONSE') {
+            // 标记冷却并以冷却错误返回：客户端收到 RATE_LIMIT_COOLDOWN 会走长退避
+            // 而不触发“空响应自动换设备”——避免零信任的新设备绕过熔断继续风暴。
             markPlaybackCooldown(devKey);
+            throw Object.assign(new Error('上游风控冷却中，稍后自动恢复'), { code: 'RATE_LIMIT_COOLDOWN', status: 503 });
         }
 
         if (!result.response) {
