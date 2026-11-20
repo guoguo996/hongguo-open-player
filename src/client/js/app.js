@@ -2292,7 +2292,7 @@ const app = createApp({
     function onTimeUpdate(event) {
       if (isScrubbing.value) return;
       if (event && event.target !== videoEl.value) return;
-      if (autoStreamRetryCount) autoStreamRetryCount = 0; // 播放恢复正常，清零自动重试计数
+      if (autoStreamRetryCount || cooldownRetryCount) { autoStreamRetryCount = 0; cooldownRetryCount = 0; } // 播放恢复正常，清零自动重试计数
       if (videoEl.value) {
         currentTime.value = videoEl.value.currentTime || 0;
         const rate = Number(videoEl.value.playbackRate) || 1;
@@ -2377,6 +2377,9 @@ const app = createApp({
                   bytevc2Session = window.Bytevc2Stream.start(video, progressiveUrl, Number(errData.duration), bytevc2Fallback);
                 } catch (_) { bytevc2Fallback(); return; }
                 video.play().catch(() => {});
+              } else if (errData?.code === 'RATE_LIMIT_COOLDOWN') {
+                videoErrorMessage.value = '上游风控冷却中；稍后自动重试，请勿频繁操作';
+                tryCooldownRetry();
               } else if (errData?.code === 'EMPTY_RESPONSE' || /返回空响应/.test(errData?.error || '')) {
                 videoErrorMessage.value = '上游接口返回空响应（设备鉴权受限）；正在自动生成新设备ID并重试…';
                 autoResetDeviceAndRetry(errData?.code || 'EMPTY_RESPONSE');
@@ -2439,6 +2442,23 @@ const app = createApp({
       setTimeout(() => {
         if (viewMode.value === 'theater') retryCurrentEpisode();
       }, 1500);
+    }
+
+    // 服务端风控熔断（RATE_LIMIT_COOLDOWN，冷却 60 秒）：10 秒长退避重试，最多 8 次
+    // （覆盖超过冷却窗口）；不消耗常规重试计数，播放恢复（时间更新走动）后一并清零。
+    let cooldownRetryCount = 0;
+    function tryCooldownRetry() {
+      if (cooldownRetryCount >= 8) {
+        isBuffering.value = false;
+        videoErrorMessage.value = '上游风控冷却超时；请点击“重试本集”或稍后再试';
+        return;
+      }
+      cooldownRetryCount++;
+      isBuffering.value = true;
+      showOSD(`风控冷却中，10 秒后自动重试（${cooldownRetryCount}/8）…`);
+      setTimeout(() => {
+        if (viewMode.value === 'theater') retryCurrentEpisode();
+      }, 10000);
     }
 
     // 播放异常自动换设备：上游对当前设备鉴权受限（空响应/设备注册失败）时，

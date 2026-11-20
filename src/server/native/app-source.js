@@ -32,6 +32,13 @@ const SHORTPLAY_APIS = [
     'https://api5-normal-lq.fqnovel.com/novel/player/video_model/v1/',
     'https://reading.snssdk.com/novel/player/video_model/v1/',
 ];
+// video_tab GET 降级通道：主 POST player 接口间歇性空响应时，用同一设备身份重查
+// 当前分集（hongguoTV 0.16.10 / hongguo-open-player v1.12.4，2026-11-19 实测验证）。
+const TAB_APIS = [
+    'https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/video_tab/multi_video_model/v1/',
+    'https://api5-normal-hl.fqnovel.com/reading/bookapi/video_tab/multi_video_model/v1/',
+    'https://api5-normal-lf.fqnovel.com/reading/bookapi/video_tab/multi_video_model/v1/',
+];
 const SEARCH_API = 'https://api5-normal-sinfonlinea.fqnovel.com/reading/bookapi/search/tab/v';
 const VIDEO_UA = 'com.phoenix.read/71332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)';
 const PLAYBACK_UA = 'com.phoenix.read/74332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)';
@@ -181,6 +188,31 @@ function playbackRequest(payload, identity, apiBase = VIDEO_API) {
     };
     // The transport supplies cookies scoped to the destination from the active session.
     return { url, body, headers };
+}
+
+// GET video_tab 降级：同一注册设备身份 + 同一 v5 签名器（body=null，签名器的
+// ticket 搜索对空 body 同样有效），query 版本覆写为 7.3.9.32（GET 通道校验该
+// 载体），并带 GetVideoModelRequest 的每集参数。
+function tabRequest(vid, identity, apiBase = TAB_APIS[0]) {
+    const { device_id, iid, cdid } = identity || {};
+    const values = {
+        ...V5_PLAYBACK_QUERY,
+        version_code: '73932', version_name: '7.3.9.32',
+        manifest_version_code: '73932', update_version_code: '73932', pv_player: '73932',
+        iid: iid || '', cdid: cdid || '', device_id: device_id || '',
+        video_id: String(vid), video_id_type: '0', device_level: '1',
+        need_all_video_definition: '1', need_mp4_align: '0', use_os_player: '0',
+        video_platform: '1024', source: '0', from_video_id: '',
+    };
+    const { url, headers: signedHeaders } = signPlaybackV5(apiBase, values, null);
+    return {
+        url,
+        headers: {
+            'User-Agent': V5_PLAYBACK_UA,
+            Accept: 'application/json; charset=utf-8',
+            ...signedHeaders,
+        },
+    };
 }
 
 function shortplayRequest(vid, identity, apiBase = SHORTPLAY_API) {
@@ -504,8 +536,24 @@ const entryCache = new Map();
 const preferredRouteByDevice = new Map();
 const inFlightEntryRequests = new Map();
 const SHORTPLAY_PREF_TTL_MS = 300000;
+const TAB_PREF_TTL_MS = 600000;
 const FRESH_DEVICE_SYNC_WINDOW_MS = 15000;
 const FRESH_DEVICE_RETRY_DELAY_MS = 1500;
+// 全链空响应熔断：全域名轮询失败大概率是设备级风控限频窗口（实测 44 秒 124 请求
+// 全败），继续高频重试只会延长惩罚窗口。冷却期内取址直接快速失败，客户端按
+// RATE_LIMIT_COOLDOWN 长退避后自动恢复；换新设备（新身份）不继承冷却。
+const PLAYBACK_COOLDOWN_MS = 60000;
+const playbackCooldownByDevKey = new Map();
+function inPlaybackCooldown(devKey) {
+    return (playbackCooldownByDevKey.get(devKey) || 0) > Date.now();
+}
+function markPlaybackCooldown(devKey) {
+    if (!devKey) return;
+    playbackCooldownByDevKey.set(devKey, Date.now() + PLAYBACK_COOLDOWN_MS);
+    while (playbackCooldownByDevKey.size > 32) {
+        playbackCooldownByDevKey.delete(playbackCooldownByDevKey.keys().next().value);
+    }
+}
 
 function clearEntryCache(vid) {
     if (vid) {
@@ -653,18 +701,24 @@ function setPreferredRoute(devKey, kind, apiBase) {
     preferredRouteByDevice.delete(devKey);
     preferredRouteByDevice.set(devKey, kind === 'shortplay'
         ? { kind, apiBase, expires: Date.now() + SHORTPLAY_PREF_TTL_MS }
-        : { kind, apiBase });
+        : kind === 'tab'
+            ? { kind, apiBase, expires: Date.now() + TAB_PREF_TTL_MS }
+            : { kind, apiBase });
     while (preferredRouteByDevice.size > 32) {
         preferredRouteByDevice.delete(preferredRouteByDevice.keys().next().value);
     }
 }
 
 function buildPlaybackSteps(devKey) {
+    const tabSteps = TAB_APIS.map(apiBase => ({ kind: 'tab', apiBase }));
     const pref = getPreferredRoute(devKey);
+    if (pref?.kind === 'tab' && TAB_APIS.includes(pref.apiBase)) {
+        return [{ kind: 'tab', apiBase: pref.apiBase }, ...tabSteps.filter(s => s.apiBase !== pref.apiBase)];
+    }
     if (pref?.kind === 'shortplay') {
         const restShortplay = SHORTPLAY_APIS.filter(api => api !== pref.apiBase).map(apiBase => ({ kind: 'shortplay', apiBase }));
         const multiSteps = VIDEO_APIS.map(apiBase => ({ kind: 'multi', apiBase }));
-        return [{ kind: 'shortplay', apiBase: pref.apiBase }, ...multiSteps, ...restShortplay];
+        return [{ kind: 'shortplay', apiBase: pref.apiBase }, ...multiSteps, ...restShortplay, ...tabSteps];
     }
     const orderedMulti = pref?.kind === 'multi' && VIDEO_APIS.includes(pref.apiBase)
         ? [pref.apiBase, ...VIDEO_APIS.filter(api => api !== pref.apiBase)]
@@ -672,6 +726,7 @@ function buildPlaybackSteps(devKey) {
     return [
         ...orderedMulti.map(apiBase => ({ kind: 'multi', apiBase })),
         ...SHORTPLAY_APIS.map(apiBase => ({ kind: 'shortplay', apiBase })),
+        ...tabSteps,
     ];
 }
 
@@ -714,6 +769,23 @@ async function runPlaybackSteps(steps, vid, payload, device, execRequestJson, de
                 const hasEntry = Boolean(resp?.data?.[vid] || entryCache.get(vid)?.entry);
                 if (hasEntry) setPreferredRoute(devKey, 'multi', step.apiBase);
                 return { response: resp, allEmpty: false };
+            }
+
+            if (step.kind === 'tab') {
+                const signed = tabRequest(vid, device, step.apiBase);
+                const resp = await execRequestJson(signed.url, { method: 'GET', headers: signed.headers }, deadline, signal);
+                if (Number(resp?.Code || resp?.code || 0) !== 0) continue;
+                // video_tab 返回 data.video_model_data[vid].video_model（可能为 JSON
+                // 字符串），归一化为 POST player 响应同构形状，下游解析零改动。
+                const rows = resp?.data?.video_model_data || resp?.data || {};
+                const row = rows[vid];
+                const rawModel = row?.video_model;
+                const model = typeof rawModel === 'string' ? jsonBody(rawModel) : rawModel;
+                if (!model || !Array.isArray(model.video_list) || model.video_list.length === 0) continue;
+                const normalized = { code: 0, data: { [vid]: { video_model: model } } };
+                cacheResponseEntries(normalized);
+                setPreferredRoute(devKey, 'tab', step.apiBase);
+                return { response: normalized, allEmpty: false };
             }
 
             const shortSigned = shortplayRequest(vid, device, step.apiBase);
@@ -791,7 +863,11 @@ async function resolveUpstreamEntry(vid, batch, refresh, callerSignal) {
         const execRequestJson = (url, requestOptions, ...args) => (module.exports.requestJson || requestJson)(url,
             { ...requestOptions, diagnostics: { playback_id: playbackId, vid } }, ...args);
         const device = await getPlaybackDevice(execRequestJson, internalSignal);
-        const steps = buildPlaybackSteps(deviceKey(device));
+        const devKey = deviceKey(device);
+        if (inPlaybackCooldown(devKey)) {
+            throw Object.assign(new Error('上游风控冷却中，稍后自动恢复'), { code: 'RATE_LIMIT_COOLDOWN', status: 503 });
+        }
+        const steps = buildPlaybackSteps(devKey);
         let result = await runPlaybackSteps(steps, vid, payload, device, execRequestJson, deadline, internalSignal);
 
         if (!result.response && result.allEmpty && device?.created_at
@@ -804,8 +880,16 @@ async function resolveUpstreamEntry(vid, batch, refresh, callerSignal) {
                 { kind: 'multi', apiBase: VIDEO_API },
                 { kind: 'shortplay', apiBase: SHORTPLAY_API },
                 { kind: 'shortplay', apiBase: 'https://api5-normal-lq.fqnovel.com/novel/player/video_model/v1/' },
+                ...TAB_APIS.map(apiBase => ({ kind: 'tab', apiBase })),
             ];
             result = await runPlaybackSteps(retrySteps, vid, payload, device, execRequestJson, deadline, internalSignal);
+        }
+
+        if (result.response) {
+            // 任一通道成功即撤销冷却：冷却只是限频窗口的保守估计，上游恢复后不应残留。
+            playbackCooldownByDevKey.delete(devKey);
+        } else if (result.allEmpty && result.lastError?.code === 'EMPTY_RESPONSE') {
+            markPlaybackCooldown(devKey);
         }
 
         if (!result.response) {
