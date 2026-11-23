@@ -61,7 +61,7 @@ for (const platform of ['darwin', 'win32', 'linux']) test(`desktop lifecycle and
   assert.ok(aboutHelp);
   aboutHelp.click();
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(openedUrl, 'https://github.com/zfdang/hongguo-open-player');
+  assert.equal(openedUrl, 'https://github.com/guoguo996/hongguo-open-player');
 });
 
 test('packaging artifact names use english hongguo-player-plus without breaking chinese productName', () => {

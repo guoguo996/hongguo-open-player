@@ -3,8 +3,8 @@
 
 # 红果开源播放器 (Hongguo Open Player)
 
-[![CI](https://github.com/zfdang/hongguo-open-player/actions/workflows/ci.yml/badge.svg)](https://github.com/zfdang/hongguo-open-player/actions/workflows/ci.yml)
-[![Release](https://github.com/zfdang/hongguo-open-player/actions/workflows/build-release.yml/badge.svg)](https://github.com/zfdang/hongguo-open-player/actions/workflows/build-release.yml)
+[![CI](https://github.com/guoguo996/hongguo-open-player/actions/workflows/ci.yml/badge.svg)](https://github.com/guoguo996/hongguo-open-player/actions/workflows/ci.yml)
+[![Release](https://github.com/guoguo996/hongguo-open-player/actions/workflows/build-release.yml/badge.svg)](https://github.com/guoguo996/hongguo-open-player/actions/workflows/build-release.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 
 一款红果短剧跨平台桌面播放客户端（支持 macOS 与 Windows）。无需安装安卓模拟器，内置流媒体解密与本地代理，提供剧目检索、演员与作品浏览、沉浸式观影、评论互动、推荐流预览与本地/云端进度记忆。并且支持登录红果账号，查看红果记录、收藏和预约记录。
@@ -75,7 +75,6 @@
 * **⚡ 按需读取与预加载**：按播放器请求的 Range 范围读取并解密媒体，兼容路径支持并发分块下载；条件允许时预取下一集信息，减少连播等待；
 * **🔎 最近搜索**：搜索框保存最近 10 条搜索，支持再次搜索、单条删除和清空；
 * **💬 弹幕**：观看时可开启弹幕，并调整显示行数、滚动速度和不透明度；
-* **🌟 剧星榜与演员主页**：顶部「剧星榜」入口支持分页浏览演员排名与人气信息；点击演员查看简介、合作演员及参演短剧，作品列表可加载更多，点击作品即可进入播放；
 * **📱 沉浸式影院视效**：智能画幅自适应（横屏 16:9 / 竖屏 9:16 均按最大视口等比铺满），支持一键全屏、双击全屏、铺满模式与选集侧栏收展；
 * **⌨️ 快捷键对齐移动端**：
   * `空格` / `K`：播放 / 暂停
@@ -96,7 +95,7 @@
 
 目前 macOS 安装包未使用 Apple 开发者证书签名和公证，系统的安全检查可能阻止其打开，并提示“应用已损坏”。同样的提示也可能由下载损坏或文件被篡改引起。
 
-请先从项目的 [GitHub Releases](https://github.com/zfdang/hongguo-open-player/releases) 重新下载安装包，选择适合自己 Mac 的版本，并将应用拖入“应用程序”文件夹。如果确认应用来自官方发布页面且未被篡改，仍然无法打开，可以打开“终端”并执行：
+请先从项目的 [GitHub Releases](https://github.com/guoguo996/hongguo-open-player/releases) 重新下载安装包，选择适合自己 Mac 的版本，并将应用拖入“应用程序”文件夹。如果确认应用来自官方发布页面且未被篡改，仍然无法打开，可以打开“终端”并执行：
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/红果开源播放器.app"

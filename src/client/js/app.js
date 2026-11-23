@@ -1196,7 +1196,7 @@ const app = createApp({
 
     function openGithubRepo() {
       showAppMenu.value = false;
-      window.open('https://github.com/zfdang/hongguo-open-player', '_blank');
+      window.open('https://github.com/guoguo996/hongguo-open-player', '_blank');
     }
 
     function setControlsHidden(hidden) {
