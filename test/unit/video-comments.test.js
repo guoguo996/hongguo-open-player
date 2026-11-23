@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  fetchVideoComments, buildCommentBody, mapComment, parseCommentJson,
+  fetchVideoComments, fetchSeriesComments, buildCommentBody, mapComment, parseCommentJson,
 } = require('../../src/server/native/video-comments');
 
 const VID = '7673382597912710168';
@@ -88,6 +88,50 @@ test('fetchVideoComments 回传 cursor 翻页', async () => {
   assert.equal(result.success, true);
   assert.equal(result.has_more, false);
   assert.equal(result.items[0].text, '第二页');
+});
+
+test('fetchSeriesComments 使用剧评通道 cs=1011/sc=0/ct=2/gt=2 且 group_id=seriesId', async () => {
+  let captured = null;
+  const transport = async (url, body, config) => {
+    captured = { url, body: JSON.parse(body), headers: config.headers };
+    return ok({
+      code: 0,
+      data: {
+        data_list: [commentRow({ id: '3333333333333333333', text: '整季好看' }), commentRow({ id: '4444444444444444444', text: '演技在线' })],
+        common_list_info: { total: 509, has_more: true, cursor: '20' },
+      },
+    });
+  };
+  const result = await fetchSeriesComments({ seriesId: SID, transport, device: { deviceId: '7398123456789012345', installId: '7398123456789012346' } });
+  assert.equal(result.success, true);
+  assert.equal(result.items.length, 2);
+  assert.equal(result.total, 509);
+  assert.equal(result.has_more, true);
+  assert.equal(result.cursor, '20');
+  assert.equal(result.items[0].text, '整季好看');
+  assert.equal(captured.headers['Comment-Source'], '1011');
+  assert.equal(captured.headers['Server-Channel'], '0');
+  assert.equal(captured.body.comment_source, 1011);
+  assert.equal(captured.body.server_channel, 0);
+  assert.equal(captured.body.comment_type, 2);
+  assert.equal(captured.body.group_type, 2);
+  assert.equal(captured.body.group_id, SID);
+  assert.equal(captured.body.business_param.book_id, SID);
+  assert.ok(captured.url.includes(`/novel/commentapi/comment/list/${SID}/v1/`));
+});
+
+test('fetchSeriesComments 回传 cursor 翻页且非法 seriesId 转中文 notice', async () => {
+  const transport = async (_url, body) => {
+    assert.equal(JSON.parse(body).cursor, '20');
+    return ok({ code: 0, data: { data_list: [commentRow({ text: '第二页剧评' })], common_list_info: { total: 509, has_more: false, cursor: '' } } });
+  };
+  const result = await fetchSeriesComments({ seriesId: SID, cursor: '20', transport, device: { deviceId: '7398123456789012345', installId: '7398123456789012346' } });
+  assert.equal(result.success, true);
+  assert.equal(result.has_more, false);
+  assert.equal(result.items[0].text, '第二页剧评');
+  const bad = await fetchSeriesComments({ seriesId: 'abc' });
+  assert.equal(bad.success, false);
+  assert.ok(bad.notice.includes('剧评'));
 });
 
 test('fetchVideoComments 非法 ID 与业务拒绝转中文 notice', async () => {

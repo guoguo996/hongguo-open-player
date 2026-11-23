@@ -1,7 +1,8 @@
-const DOWNLOAD_QUALITIES = ['auto', '1080p', '720p'];
+// 播放与下载共用的清晰度白名单（与红果上游五档片源 + 自动档对应）
+const DOWNLOAD_QUALITIES = ['auto', '1080p', '720p', '540p', '480p', '360p'];
 
 function normalizeDownloadQuality(value = 'auto') {
-  if (!DOWNLOAD_QUALITIES.includes(value)) throw new Error('下载清晰度无效，请选择自动、1080p 或 720p');
+  if (!DOWNLOAD_QUALITIES.includes(value)) throw new Error('清晰度无效，请选择 自动、1080p、720p、540p、480p 或 360p');
   return value;
 }
 

@@ -1259,7 +1259,7 @@ test('index.html and app.css include multi-season navigation and text selection 
   assert.ok(css.includes('.season-playing-tag'), 'season-playing-tag styling must exist');
 });
 
-test('video resolution badge reflects loaded metadata dimensions and keyboard-hints are removed', () => {
+test('quality menu exposes all tiers, resolution badge is removed, keyboard-hints are removed', () => {
   const path = require('node:path');
   const html = fs.readFileSync(path.resolve(__dirname, '../../src/client/index.html'), 'utf-8');
   const css = fs.readFileSync(path.resolve(__dirname, '../../src/client/css/app.css'), 'utf-8');
@@ -1267,36 +1267,15 @@ test('video resolution badge reflects loaded metadata dimensions and keyboard-hi
   // Verify keyboard-hints bar is removed
   assert.ok(!html.includes('class="keyboard-hints"'), 'keyboard-hints bar should be removed from index.html');
 
-  // Verify resolution badge is in index.html and app.css
-  assert.ok(html.includes('class="resolution-badge"'), 'resolution-badge should be present in index.html');
-  assert.ok(css.includes('.resolution-badge'), '.resolution-badge styling should be in app.css');
+  // Verify resolution badge is fully removed (replaced by configurable quality menu)
+  assert.ok(!html.includes('resolution-badge'), 'resolution-badge should be removed from index.html');
+  assert.ok(!css.includes('.resolution-badge'), '.resolution-badge styling should be removed from app.css');
 
-  // Verify client resolution logic
+  // Verify quality menu is wired into the controls bar
+  assert.ok(html.includes('quality-menu'), 'quality menu should be present in index.html');
   const state = client(async () => response({}));
-  assert.equal(state.videoResolution.value.width, 0);
-  assert.equal(state.resolutionText.value, '');
-
-  state.videoEl.value = { videoWidth: 1080, videoHeight: 1920, duration: 100, volume: 1, pause() {} };
-  state.onLoadedMetadata();
-  assert.equal(state.videoResolution.value.width, 1080);
-  assert.equal(state.videoResolution.value.height, 1920);
-  assert.equal(state.resolutionText.value, '1080p');
-  assert.ok(state.resolutionTitle.value.includes('1080 × 1920 (1080p)'));
-
-  // Test horizontal 720p
-  state.videoEl.value = { videoWidth: 1280, videoHeight: 720, pause() {} };
-  state.onCanPlay();
-  assert.equal(state.resolutionText.value, '720p');
-
-  // Test 4K
-  state.videoEl.value = { videoWidth: 3840, videoHeight: 2160, pause() {} };
-  state.onCanPlay();
-  assert.equal(state.resolutionText.value, '4K');
-
-  // Test leaving theater resets resolution
-  state.closeTheater();
-  assert.equal(state.videoResolution.value.width, 0);
-  assert.equal(state.resolutionText.value, '');
+  assert.deepEqual(state.videoQuality.value, 'auto');
+  assert.deepEqual([...state.qualityOptions.map(q => q.value)], ['auto', '1080p', '720p', '540p', '480p', '360p']);
 });
 
 test('client detects unsupported HEVC pre-flight and appends hevc=0 to stream and prefetch URLs', async () => {
