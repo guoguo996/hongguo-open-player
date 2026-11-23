@@ -7,7 +7,7 @@
 [![Release](https://github.com/zfdang/hongguo-open-player/actions/workflows/build-release.yml/badge.svg)](https://github.com/zfdang/hongguo-open-player/actions/workflows/build-release.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 
-一款红果短剧跨平台桌面播放客户端（支持 macOS 与 Windows）。无需安装安卓模拟器，内置流媒体解密与本地代理，提供剧目检索、演员与作品浏览、沉浸式观影、评论互动、推荐流预览与本地/云端进度记忆。
+一款红果短剧跨平台桌面播放客户端（支持 macOS 与 Windows）。无需安装安卓模拟器，内置流媒体解密与本地代理，提供剧目检索、演员与作品浏览、沉浸式观影、评论互动、推荐流预览与本地/云端进度记忆。并且支持登录红果账号，查看红果记录、收藏和预约记录。
 
 ---
 
@@ -39,11 +39,23 @@
 
 ![搜索结果及最近搜索下拉列表](docs/screenshots/search-history.jpg)
 
-### 剧星榜与演员作品
+### 红果记录
 
-浏览剧星榜和人气变化，筛选演员并进入主页查看参演作品。
+可以查看登录红果账号的观看记录
 
-![剧星榜：演员筛选和按排名排列的演员卡片](docs/screenshots/actor-ranking.jpg)
+![红果记录](docs/screenshots/record.png)
+
+### 收藏记录
+
+可以查看登录红果账号的收藏记录
+
+![收藏记录](docs/screenshots/collect.png)
+
+### 预约记录
+
+可以查看登录红果账号的预约记录
+
+![预约记录](docs/screenshots/reserve.png)
 
 ---
 
