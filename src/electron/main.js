@@ -192,7 +192,7 @@ async function buildWindow() {
   }
 }
 
-const GITHUB_REPO_URL = 'https://github.com/zfdang/hongguo-open-player';
+const GITHUB_REPO_URL = 'https://github.com/guoguo996/hongguo-open-player';
 
 function showAboutDialog() {
   const version = typeof app.getVersion === 'function' ? app.getVersion() : '1.0.0';
@@ -368,7 +368,7 @@ if (!gotTheLock) {
       app.setAboutPanelOptions({
         applicationName: '红果播放器 Plus',
         applicationVersion: typeof app.getVersion === 'function' ? app.getVersion() : '1.0.0',
-        copyright: 'Copyright © 2026 zfdang. Licensed under GPL-3.0.',
+        copyright: 'Copyright © 2026 guoguo996. Licensed under GPL-3.0.',
         website: GITHUB_REPO_URL,
         credits: GITHUB_REPO_URL
       });

@@ -59,31 +59,38 @@ const app = createApp({
       showSpeedMenu.value = false;
       changeSpeed();
     }
+    // 清晰度选择：与下游白名单一致（auto/1080p/720p/540p/480p/360p），
+    // 非 auto 档会把 quality 参数带给 /api/stream，由服务端就近选档（allowLowerQuality）
+    const videoQuality = ref('auto');
+    const qualityOptions = [
+      { value: 'auto', label: '自动' },
+      { value: '1080p', label: '1080P' },
+      { value: '720p', label: '720P' },
+      { value: '540p', label: '540P' },
+      { value: '480p', label: '480P' },
+      { value: '360p', label: '360P' },
+    ];
+    const showQualityMenu = ref(false);
+    const qualityLabel = computed(() => qualityOptions.find(q => q.value === videoQuality.value)?.label || '自动');
+    function selectQuality(value) {
+      showQualityMenu.value = false;
+      if (videoQuality.value === value) return;
+      videoQuality.value = value;
+      savePreferences({ videoQuality: value });
+      // 旧的 ByteVC2 渐进式会话绑定在即将销毁的播放器上，必须先停掉并清空兜底状态，
+      // 否则新播放器报错时会走旧兜底（video !== videoEl.value 直接静默返回）导致黑屏不播
+      bytevc2Session?.stop();
+      bytevc2Session = null;
+      bytevc2Fallback = null;
+      bytevc2FallbackActive = false;
+      // 流 URL 变化会按 :key 重建播放器，先记录当前进度以便切换后续播
+      if (videoEl.value && Number(videoEl.value.currentTime) > 0) pendingResumeSec = Number(videoEl.value.currentTime);
+      isBuffering.value = true;
+      videoErrorMessage.value = '';
+      nextTick(() => { videoEl.value?.play?.().catch(() => {}); });
+    }
     const volume = ref(1.0);
     const isMuted = ref(false);
-    const videoResolution = ref({ width: 0, height: 0 });
-
-    const resolutionText = computed(() => {
-      const w = videoResolution.value.width;
-      const h = videoResolution.value.height;
-      if (!w || !h) return '';
-      const minDim = Math.min(w, h);
-      if (minDim >= 2160) return '4K';
-      if (minDim >= 1440) return '2K';
-      if (minDim >= 1080) return '1080p';
-      if (minDim >= 720) return '720p';
-      if (minDim >= 540) return '540p';
-      if (minDim >= 480) return '480p';
-      if (minDim >= 360) return '360p';
-      return `${minDim}p`;
-    });
-
-    const resolutionTitle = computed(() => {
-      const w = videoResolution.value.width;
-      const h = videoResolution.value.height;
-      if (!w || !h) return '分辨率加载中';
-      return `当前视频分辨率：${w} × ${h} (${resolutionText.value})`;
-    });
     const watchedMap = ref(new Map()); // seriesId -> Set(epIndexes)
     let progressTimer = null;
     let pendingResumeSec = 0;
@@ -339,7 +346,7 @@ const app = createApp({
         const response = await fetch('/api/preferences');
         if (!response.ok) throw new Error('读取失败');
         const prefs = await response.json();
-        const refs = { danmakuEnabled, danmakuRows, danmakuOpacity, danmakuFontSize, danmakuSpeed, danmakuLikesPriority, volume, isMuted, playbackRate, fitMode };
+        const refs = { danmakuEnabled, danmakuRows, danmakuOpacity, danmakuFontSize, danmakuSpeed, danmakuLikesPriority, volume, isMuted, playbackRate, fitMode,videoQuality };
         for (const [key, value] of Object.entries(prefs)) {
           if (refs[key] && !changedPreferences.has(key)) refs[key].value = value;
         }
@@ -1209,7 +1216,7 @@ const app = createApp({
 
     function openGithubRepo() {
       showAppMenu.value = false;
-      window.open('https://github.com/zfdang/hongguo-open-player', '_blank');
+      window.open('https://github.com/guoguo996/hongguo-open-player', '_blank');
     }
 
     function setControlsHidden(hidden) {
@@ -1354,6 +1361,7 @@ const app = createApp({
       const params = [];
       if (window.Bytevc2Stream?.supported()) params.push('mse=1');
       if (!hevcSupported.value) params.push('hevc=0');
+      if (videoQuality.value && videoQuality.value !== 'auto') params.push(`quality=${videoQuality.value}`);
       if (nextEp1?.vid) params.push(`next_vid=${encodeURIComponent(nextEp1.vid)}`);
       if (nextList.length > 1) params.push(`next_vids=${encodeURIComponent(nextList.join(','))}`);
       if (streamRefreshTick.value > 0) params.push(`refresh=${streamRefreshTick.value}`);
@@ -1656,6 +1664,69 @@ const app = createApp({
     }
 
     let lastFocusedBeforeDramaModal = null;
+
+    // 弹窗内当前季的评分/评价：目录列表项常缺 social_info，打开或切季时从详情接口补拉
+    const detailSocialInfo = ref(null);
+    let detailSocialRequest = 0;
+    async function loadDetailSocial() {
+      const seriesId = String(activeSeries.value?.series_id || '');
+      if (!/^\d{6,30}$/.test(seriesId)) { detailSocialInfo.value = null; return; }
+      const request = ++detailSocialRequest;
+      detailSocialInfo.value = null;
+      try {
+        const data = await fetch(`/api/series/${encodeURIComponent(seriesId)}`).then(r => r.json());
+        if (request !== detailSocialRequest || String(activeSeries.value?.series_id || '') !== seriesId) return;
+        detailSocialInfo.value = data?.social_info || null;
+      } catch (_) { /* 评分非关键数据，静默失败 */ }
+    }
+    watch(() => [showDramaDetailModal.value, activeSeries.value?.series_id], ([open]) => { if (open) { loadDetailSocial(); loadSeriesComments(); } });
+    // 优先用补拉的详情数据，目录自带 social_info 时兜底
+    const detailSocialRating = computed(() => Number(detailSocialInfo.value?.rating) || Number(activeSeries.value?.social_info?.rating) || null);
+    const detailSocialCount = computed(() => String(detailSocialInfo.value?.rating_count || activeSeries.value?.social_info?.rating_count || ''));
+
+    // 弹窗内剧评（整季整体评论，与分集评论不同接口：/api/series-comments）
+    const seriesComments = ref({ loading: false, items: [], total: 0, has_more: false, cursor: '', notice: '', key: '' });
+    let seriesCommentsRequest = 0;
+    async function loadSeriesComments(force = false) {
+      const seriesId = String(activeSeries.value?.series_id || '');
+      if (!/^\d{6,30}$/.test(seriesId)) return;
+      if (!force && seriesComments.value.key === seriesId && seriesComments.value.items.length) return;
+      const request = ++seriesCommentsRequest;
+      seriesComments.value = { loading: true, items: [], total: 0, has_more: false, cursor: '', notice: '', key: seriesId };
+      try {
+        const data = await fetch(`/api/series-comments/${encodeURIComponent(seriesId)}`).then(r => r.json());
+        if (request !== seriesCommentsRequest) return;
+        seriesComments.value = {
+          loading: false,
+          items: Array.isArray(data.items) ? data.items : [],
+          total: Number(data.total) || 0,
+          has_more: Boolean(data.has_more),
+          cursor: typeof data.cursor === 'string' ? data.cursor : '',
+          notice: data.notice || (data.success ? '' : '剧评加载失败'),
+          key: seriesId,
+        };
+      } catch (_) {
+        if (request === seriesCommentsRequest) seriesComments.value = { ...seriesComments.value, loading: false, notice: '剧评加载失败' };
+      }
+    }
+    async function loadMoreSeriesComments() {
+      const seriesId = String(activeSeries.value?.series_id || '');
+      if (!seriesId || seriesComments.value.loading || !seriesComments.value.has_more) return;
+      const request = seriesCommentsRequest;
+      seriesComments.value.loading = true;
+      try {
+        const data = await fetch(`/api/series-comments/${encodeURIComponent(seriesId)}?cursor=${encodeURIComponent(seriesComments.value.cursor)}`).then(r => r.json());
+        if (request !== seriesCommentsRequest) return;
+        const seen = new Set(seriesComments.value.items.map(item => item.comment_id));
+        const fresh = (Array.isArray(data.items) ? data.items : []).filter(item => !seen.has(item.comment_id));
+        seriesComments.value.items = seriesComments.value.items.concat(fresh);
+        seriesComments.value.has_more = Boolean(data.has_more);
+        seriesComments.value.cursor = typeof data.cursor === 'string' ? data.cursor : '';
+        seriesComments.value.loading = false;
+      } catch (_) {
+        if (request === seriesCommentsRequest) seriesComments.value.loading = false;
+      }
+    }
 
     function openDramaDetail() {
       if (!activeSeries.value) return;
@@ -1976,7 +2047,6 @@ const app = createApp({
       reportCloudProgress(true);
       if (videoEl.value && typeof videoEl.value.pause === 'function') videoEl.value.pause();
       resetPlayback();
-      videoResolution.value = { width: 0, height: 0 };
       setControlsHidden(false);
       clearTimeout(controlsHideTimer);
       showDramaDetailModal.value = false;
@@ -2260,12 +2330,6 @@ const app = createApp({
       if (event && event.target !== videoEl.value) return;
       if (checkVideoDimensionsFallback(videoEl.value)) return;
       isBuffering.value = false;
-      if (videoEl.value?.videoWidth && videoEl.value?.videoHeight) {
-        videoResolution.value = {
-          width: videoEl.value.videoWidth,
-          height: videoEl.value.videoHeight
-        };
-      }
     }
 
     function onPause(event) {
@@ -2284,12 +2348,6 @@ const app = createApp({
       if (videoEl.value) {
         progressReady = true;
         duration.value = videoEl.value.duration || 0;
-        if (videoEl.value.videoWidth && videoEl.value.videoHeight) {
-          videoResolution.value = {
-            width: videoEl.value.videoWidth,
-            height: videoEl.value.videoHeight
-          };
-        }
         videoEl.value.volume = Number(volume.value);
         videoEl.value.muted = isMuted.value;
         if (navigator.mediaSession && typeof MediaMetadata !== 'undefined') {
@@ -2616,7 +2674,7 @@ const app = createApp({
       if (isTextEditingTarget(e.target)) return;
       if (e.target?.tagName === 'SELECT') return;
 
-      if ((e.code === 'Escape' || e.key === 'Escape') && showSpeedMenu.value) { showSpeedMenu.value = false; e.preventDefault(); return; }
+      if ((e.code === 'Escape' || e.key === 'Escape') && (showSpeedMenu.value || showQualityMenu.value)) { showSpeedMenu.value = false; showQualityMenu.value = false; e.preventDefault(); return; }
       if (e.code === 'Escape' || e.key === 'Escape') {
         if (showAppMenu.value) {
           e.preventDefault();
@@ -2722,6 +2780,7 @@ const app = createApp({
 
     function handleGlobalClick(e) {
       if (showSpeedMenu.value && !e.target?.closest?.('.speed-selector')) showSpeedMenu.value = false;
+      if (showQualityMenu.value && !e.target?.closest?.('.quality-selector')) showQualityMenu.value = false;
       if (showAppMenu.value && !e.target?.closest?.('.header-menu-container')) {
         showAppMenu.value = false;
       }
@@ -2819,10 +2878,10 @@ const app = createApp({
       duration,
       bufferedPercent,
       playedPercent,
-      playbackRate, showSpeedMenu, selectSpeed,
+      playbackRate, showSpeedMenu, selectSpeed, videoQuality, qualityOptions, qualityLabel, showQualityMenu, selectQuality,
       volume,
       isMuted,
-      videoResolution, resolutionText, resolutionTitle, hevcSupported,
+      hevcSupported,
       currentGroup,
       currentStreamUrl,
       episodeGroups,
@@ -2864,6 +2923,10 @@ const app = createApp({
       keepPlayerFocus,
       catalogError,
       showDramaDetailModal,
+      detailSocialRating,
+      detailSocialCount,
+      seriesComments,
+      loadMoreSeriesComments,
       openDramaDetail,
       closeDramaDetail,
       onDramaModalKeydown,

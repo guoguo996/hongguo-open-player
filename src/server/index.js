@@ -164,6 +164,16 @@ app.get('/api/video-comments/:seriesId/:vid', async (req, res) => {
   res.json(result);
 });
 
+// 剧评（整季评论，只读，匿名可调用）：与分集评论不同通道（source=1011/gt=2）。
+app.get('/api/series-comments/:seriesId', async (req, res) => {
+  const { seriesId } = req.params;
+  if (!/^\d{6,30}$/.test(seriesId)) return res.status(400).json({ error: '剧集编号无效' });
+  const cursor = typeof req.query.cursor === 'string' && req.query.cursor.length <= 40 ? req.query.cursor : '';
+  const result = await require('./native/video-comments').fetchSeriesComments({ seriesId, cursor });
+  res.set('Cache-Control', 'no-store');
+  res.json(result);
+});
+
 // 评论写操作（点赞 / 回复）：仅由用户 UI 主动触发，需登录态（sessionid Cookie）。
 const videoCommentsService = () => require('./native/video-comments');
 const commentSessionCookie = () => {

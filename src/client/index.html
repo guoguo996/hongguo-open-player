@@ -449,14 +449,17 @@
                 </button>
                 <!-- 倍速选择 -->
                 <div class="speed-selector" @pointerenter="clearControlsTimer" @pointerleave="resetControlsTimer">
-                  <button class="speed-button" @click="showSpeedMenu = !showSpeedMenu" :aria-expanded="showSpeedMenu" aria-label="播放倍速">{{ playbackRate }}x <span aria-hidden="true">⌃</span></button>
+                  <button class="speed-button" @click="showSpeedMenu = !showSpeedMenu; showQualityMenu = false" :aria-expanded="showSpeedMenu" aria-label="播放倍速">{{ playbackRate }}x <span aria-hidden="true">⌃</span></button>
                   <div v-if="showSpeedMenu" class="speed-menu" aria-label="选择播放倍速">
                     <button v-for="rate in ['0.75', '1.0', '1.25', '1.5', '2.0']" :key="rate" :class="{ active: playbackRate === rate }" :aria-pressed="playbackRate === rate" @click="selectSpeed(rate)">{{ rate }}x <span v-if="playbackRate === rate" aria-hidden="true">✓</span></button>
                   </div>
                 </div>
-                <!-- 视频清晰度/分辨率标签 -->
-                <div v-if="resolutionText" class="resolution-badge" :title="resolutionTitle" aria-label="当前分辨率">
-                  {{ resolutionText }}
+                <!-- 清晰度选择 -->
+                <div class="quality-selector" @pointerenter="clearControlsTimer" @pointerleave="resetControlsTimer">
+                  <button class="speed-button" @click="showQualityMenu = !showQualityMenu; showSpeedMenu = false" :aria-expanded="showQualityMenu" aria-label="播放清晰度">{{ qualityLabel }} <span aria-hidden="true">⌃</span></button>
+                  <div v-if="showQualityMenu" class="speed-menu quality-menu" aria-label="选择清晰度">
+                    <button v-for="opt in qualityOptions" :key="opt.value" :class="{ active: videoQuality === opt.value }" :aria-pressed="videoQuality === opt.value" @click="selectQuality(opt.value)">{{ opt.label }} <span v-if="videoQuality === opt.value" aria-hidden="true">✓</span></button>
+                  </div>
                 </div>
                 <!-- 音量 -->
                 <div class="volume-box">
@@ -709,8 +712,8 @@
                 <span v-if="activeSeries.social_info?.hot_text" class="detail-hot-tag">
                   <span class="fire-icon">🔥</span> {{ activeSeries.social_info.hot_text }}
                 </span>
-                <span v-if="activeSeries.social_info?.rating" class="detail-rating-tag">
-                  ⭐ {{ activeSeries.social_info.rating }} 分
+                <span v-if="detailSocialRating" class="detail-rating-tag" :title="detailSocialCount ? `${detailSocialCount} 人评价` : '暂无评价数据'">
+                  ⭐ {{ detailSocialRating }} 分<span v-if="detailSocialCount" class="detail-rating-count">（{{ detailSocialCount }} 评价）</span>
                 </span>
                 <span v-if="activeSeries.social_info?.like_count" class="detail-stat-dim">
                   👍 {{ activeSeries.social_info.like_count }} 点赞
@@ -724,6 +727,22 @@
           <button class="modal-close-btn" @click="closeDramaDetail" title="关闭 (Esc)">✕</button>
         </div>
         <div class="drama-modal-body">
+          <!-- 本剧剧评（整季整体评论，与右侧分集评论不同接口） -->
+          <div class="drama-series-comments">
+            <h4 class="intro-heading">💬 剧评<template v-if="seriesComments.total">（{{ seriesComments.total }}）</template></h4>
+            <p v-if="seriesComments.loading && !seriesComments.items.length" class="series-comments-notice">剧评加载中…</p>
+            <p v-else-if="seriesComments.notice && !seriesComments.items.length" class="series-comments-notice">{{ seriesComments.notice }}</p>
+            <div v-else class="series-comments-list">
+              <div v-for="item in seriesComments.items" :key="item.comment_id" class="series-comment-item">
+                <div class="series-comment-head">
+                  <span class="series-comment-name">{{ item.user_name }}</span>
+                  <span class="series-comment-stats">👍 {{ formatCount(item.digg_count) }}<template v-if="item.reply_count"> · 💬 {{ item.reply_count }}</template></span>
+                </div>
+                <p class="series-comment-text">{{ item.text }}</p>
+              </div>
+              <button v-if="seriesComments.has_more" type="button" class="series-comments-more" :disabled="seriesComments.loading" @click="loadMoreSeriesComments">{{ seriesComments.loading ? '加载中…' : '加载更多剧评' }}</button>
+            </div>
+          </div>
           <!-- 系列全季快速切换 (已排好序) -->
           <div v-if="relatedSeasons.length > 1" class="drama-seasons-section">
             <div class="drama-seasons-head">
@@ -1101,7 +1120,7 @@
             </div>
             <div class="about-meta-item">
               <span class="meta-label">项目主页：</span>
-              <a class="meta-link" href="https://github.com/zfdang/hongguo-open-player" target="_blank" rel="noopener">github.com/zfdang/hongguo-open-player</a>
+              <a class="meta-link" href="https://github.com/guoguo996/hongguo-open-player" target="_blank" rel="noopener">github.com/guoguo996/hongguo-open-player</a>
             </div>
           </div>
           <div class="about-disclaimer">

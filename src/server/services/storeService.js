@@ -133,6 +133,7 @@ class StoreService {
     if (typeof value.isMuted === 'boolean') valid.isMuted = value.isMuted;
     if (['0.75', '1.0', '1.25', '1.5', '2.0'].includes(value.playbackRate)) valid.playbackRate = value.playbackRate;
     if (['contain', 'cover'].includes(value.fitMode)) valid.fitMode = value.fitMode;
+    if (['auto', '1080p', '720p', '540p', '480p', '360p'].includes(value.videoQuality)) valid.videoQuality = value.videoQuality;
     return valid;
   }
 

@@ -144,6 +144,88 @@ async function fetchVideoComments(options = {}) {
   }
 }
 
+// 剧评（整季评论）通道：与分集评论完全不同的一组路由参数——
+// comment_source=1011 / server_channel=0 / comment_type=2 / group_type=2，group_id 直接用 seriesId。
+// 经本机实扫（2026-11-23，4 host × 7 source × 6 group_type 矩阵）实证：仅此组合返回真实剧评
+// （实测某剧 total=509，内容为针对整部剧的评论），分集评论的 4/18/4/30 换成 seriesId 只会返回空。
+const SERIES_COMMENT_SOURCE = 1011;
+
+/**
+ * 拉取整季剧评（针对整部剧的评论，非单集）。
+ * @returns {Promise<{success:boolean, items:Array, total:number, has_more:boolean, cursor:string, notice:string, error:string}>}
+ */
+async function fetchSeriesComments(options = {}) {
+  const base = { success: false, items: [], total: 0, has_more: false, cursor: '', notice: '', error: '' };
+  const seriesId = str(options.seriesId);
+  if (!/^\d{6,30}$/.test(seriesId)) {
+    return { ...base, notice: '仅红果来源的剧集支持查看剧评' };
+  }
+  const transport = options.transport || axios.post;
+  const now = options.now || Date.now;
+  const random = options.random || crypto.randomBytes;
+  try {
+    const stampMs = now();
+    const stamp = Math.floor(stampMs / 1000);
+    const nonce = random(sign.NONCE_BYTES);
+    const { deviceId, installId } = options.device || await resolveDeviceIdentity();
+    const rawQuery = sign.buildQuery({ stampMs, deviceId, installId });
+    const url = `${BASE_URL}${COMMENT_PATH(seriesId)}?${rawQuery}`;
+    const headers = {
+      'User-Agent': USER_AGENT,
+      Accept: 'application/json',
+      'X-XS-From-Web': '0',
+      'Sdk-Version': '2',
+      'Content-Type': 'application/json; charset=utf-8',
+      'Comment-Source': String(SERIES_COMMENT_SOURCE),
+      'Server-Channel': '0',
+      ...sign.signCommentHeaders({ rawQuery, stamp, nonce }),
+    };
+    const body = {
+      comment_source: SERIES_COMMENT_SOURCE,
+      server_channel: 0,
+      group_id: seriesId,
+      group_type: 2,
+      comment_type: 2,
+      sort: 1,
+      need_count: true,
+      count: PAGE_COUNT,
+      cursor: typeof options.cursor === 'string' ? options.cursor : '',
+      aid: 8662,
+      compliance_status: 0,
+      business_param: { book_id: seriesId, req_type: 0 },
+    };
+    const response = await transport(url, JSON.stringify(body), {
+      headers,
+      timeout: REQUEST_TIMEOUT,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT),
+      maxRedirects: 0,
+      responseType: 'text',
+      maxContentLength: MAX_RESPONSE_BYTES,
+    });
+    const raw = typeof response?.data === 'string' ? response.data : JSON.stringify(response?.data ?? null);
+    let payload;
+    try { payload = parseCommentJson(raw); } catch (_) {
+      return { ...base, notice: '剧评接口返回了非 JSON 内容' };
+    }
+    const code = Number(payload?.code ?? payload?.Code ?? -1);
+    // 剧评通道由上游灰度控制（实测窗口性放行：handler 时有时无），拒绝时统一给友好提示
+    if (code !== 0) return { ...base, notice: `剧评服务暂时不可用（code=${code}），请稍后再试` };
+    const data = payload?.data || {};
+    const list = Array.isArray(data.data_list) ? data.data_list : [];
+    const items = list.map(mapComment).filter(Boolean);
+    const info = data.common_list_info && typeof data.common_list_info === 'object' ? data.common_list_info : {};
+    const total = Number(info.total) || 0;
+    const hasMore = Boolean(info.has_more);
+    const cursor = typeof info.cursor === 'string' ? info.cursor : (info.cursor ? JSON.stringify(info.cursor) : '');
+    return { success: true, items, total, has_more: hasMore, cursor, notice: items.length || total ? '' : '暂无剧评', error: '' };
+  } catch (error) {
+    const notice = error?.code === 'ECONNABORTED' || error?.name === 'TimeoutError' || error?.code === 'ERR_CANCELED'
+      ? '剧评加载超时，请稍后重试'
+      : '剧评加载失败，请检查网络后重试';
+    return { ...base, notice, error: notice };
+  }
+}
+
 // ── 写操作（点赞 / 回复）：登录态 Cookie 必带，body 参与 X-Argus 哈希 ──────────
 
 /**
@@ -332,7 +414,7 @@ function mapReply(raw) {
 }
 
 module.exports = {
-  fetchVideoComments, fetchCommentReplies, likeVideoComment,
+  fetchVideoComments, fetchCommentReplies, likeVideoComment, fetchSeriesComments,
   buildCommentBody, mapComment, mapReply, parseCommentJson, postCommentWrite,
-  BASE_URL, COMMENT_PATH, DO_ACTION_PATH, REPLY_LIST_PATH, REPLY_LIST_SOURCE, USER_AGENT, PAGE_COUNT,
+  BASE_URL, COMMENT_PATH, DO_ACTION_PATH, REPLY_LIST_PATH, REPLY_LIST_SOURCE, SERIES_COMMENT_SOURCE, USER_AGENT, PAGE_COUNT,
 };
