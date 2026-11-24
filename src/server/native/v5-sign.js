@@ -270,7 +270,10 @@ function medusaV5(queryString, body, ts, values) {
         [9,0x040a0300,'sint'],[10,flags,'bytes'],[12,ts,'sint'],[13,f13,'bytes'],
         [14,query.subarray(0,6),'bytes'],
         [15,proto([[1,1,'sint'],[2,1,'sint'],[3,1,'sint'],[5,1,'sint']]),'message'],
-        [17,ts,'sint'],[20,'none'],[21,377,'sint'],[23,env,'message'],
+        // field21：成功样本（7.4.5.32 App/SDK）的 wire 值为 624（zigzag 有符号 312）。
+        // 2026-11-23 hongguoTV PR #107 同请求 A/B：仅把该字段换成 377 即 200/0B，
+        // 换回 312 即恢复模型。内部 SDK 语义未知，非设备/会话值。
+        [17,ts,'sint'],[20,'none'],[21,312,'sint'],[23,env,'message'],
         [24,'{"cmr":16777216,"cmr2":16777216,"un_h":11,"vpn":0,"kd":0,"dyn":"","do":1,"tk":true}'],
     ]);
     const nonce = rand();

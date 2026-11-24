@@ -100,10 +100,10 @@ test('fetchAppPlayUrl batches nextVids and caches returned models in entryCache'
     assert.ok(options.headers['x-medusa']);
     assert.equal(options.headers['x-ss-stub'], createHash('md5').update(options.data).digest('hex').toUpperCase());
     assert.equal(new URL(url).searchParams.get('aid'), '8662');
-    assert.equal(new URL(url).searchParams.get('version_name'), '7.4.3.32');
-    assert.equal(new URL(url).searchParams.get('device_type'), 'PGT-AN10');
+    assert.equal(new URL(url).searchParams.get('version_name'), '7.4.5.32');
+    assert.equal(new URL(url).searchParams.get('device_type'), '25053RT47C');
     assert.equal(new URL(url).searchParams.has('ts'), false);
-    assert.ok(options.headers['User-Agent'].includes('PGT-AN10'));
+    assert.ok(options.headers['User-Agent'].startsWith('Dalvik/'), 'preload 通道使用 Dalvik 系统 UA');
     requests.push({ url, body: JSON.parse(gunzipSync(options.data)) });
     return {
       code: 0,

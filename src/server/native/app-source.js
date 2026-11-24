@@ -17,7 +17,10 @@ const { normalizeDownloadQuality, meetsDownloadQuality } = require('./download-q
 const localId = () => String(1000000000000000n + BigInt('0x' + crypto.randomBytes(6).toString('hex')));
 const PROCESS_NONCE = crypto.randomBytes(18).toString('base64url');
 const PROCESS_STARTED = Date.now();
-const VIDEO_API = 'https://reading.snssdk.com/novel/player/multi_video_model/player/v1';
+// v5 取流主通道：2026-11-23 hongguoTV PR #107 验证的 7.4.5.32 请求画像
+// —— preload/v1 端点 + 74532 全参数 + device_level 2 + dr_scene preload。
+// field21=312（见 v5-sign.js）与该画像共同构成实测恢复组合。
+const VIDEO_API = 'https://reading.snssdk.com/novel/player/multi_video_model/preload/v1';
 const VIDEO_API_FALLBACK = 'https://api5-normal-sinfonlinea.fqnovel.com/novel/player/multi_video_model/player/v1';
 const VIDEO_APIS = [
     VIDEO_API,
@@ -44,10 +47,17 @@ const VIDEO_UA = 'com.phoenix.read/71332 (Linux; U; Android 16; zh_CN; 25053RT47
 const PLAYBACK_UA = 'com.phoenix.read/74332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)';
 // v5 playback uses the official 7.3.9.32 PGT-AN10 profile (see hongguoTV MobilePlayback.kt).
 const V5_PLAYBACK_UA = 'com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)';
+// PR #107 成功画像：preload/v1 通道使用系统默认 Dalvik UA（真机 http.agent），
+// 与 74532 设备参数（Redmi 25053RT47C / Android 16）保持同一设备描述。
+const V5_PRELOAD_UA = 'Dalvik/2.1.0 (Linux; U; Android 16; 25053RT47C Build/BP2A.250605.031.A3)';
+// 7.4.5.32 App 请求画像（PR #107 验证组合）。键序与上游 linkedMap 一致，
+// medusa 对最终 query 串签名，顺序不可乱。
 const V5_PLAYBACK_QUERY = {
-    aid: '8662', app_name: 'novelread', version_code: '74332', version_name: '7.4.3.32',
-    channel: 'vivo_8662_64', device_platform: 'android', device_type: 'PGT-AN10',
-    os_version: '12', update_version_code: '74332',
+    aid: '8662', app_name: 'novelread', version_code: '74532', version_name: '7.4.5.32',
+    update_version_code: '74532', manifest_version_code: '74532', os: 'android', ssmix: 'a',
+    channel: 'update_64', device_platform: 'android', device_type: '25053RT47C',
+    device_brand: 'Redmi', os_version: '16', os_api: '36', ac: 'wifi', language: 'zh',
+    host_abi: 'arm64-v8a',
 };
 const SEARCH_UA = 'com.phoenix.read/72232 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3)';
 const DEVICE = {
@@ -182,7 +192,7 @@ function playbackRequest(payload, identity, apiBase = VIDEO_API) {
     };
     const { url, headers: signedHeaders } = signPlaybackV5(apiBase, values, body);
     const headers = {
-        'User-Agent': V5_PLAYBACK_UA, Accept: 'application/json',
+        'User-Agent': V5_PRELOAD_UA, Accept: 'application/json',
         'Content-Encoding': 'gzip',
         ...signedHeaders,
     };
@@ -863,9 +873,9 @@ async function resolveUpstreamEntry(vid, batch, refresh, callerSignal) {
     const job = { controller, waiters: new Set(), promise: null };
     job.promise = (async () => {
         const payload = JSON.stringify({
-            biz_param: { detail_page_version: 0, device_level: 1, disable_digg_stat: false, disable_video_relate_book: false, need_all_video_definition: true, need_mp4_align: false, use_os_player: false, use_server_dns: false, video_platform: 1024 },
+            biz_param: { detail_page_version: 0, device_level: 2, disable_digg_stat: false, disable_video_relate_book: false, need_all_video_definition: true, need_mp4_align: false, use_os_player: false, use_server_dns: false, video_platform: 1024 },
             mixed_video_id_map: { '1004': batch },
-            dr_scene: 'player',
+            dr_scene: 'preload',
         });
         const playbackId = crypto.randomUUID();
         const execRequestJson = (url, requestOptions, ...args) => (module.exports.requestJson || requestJson)(url,
@@ -884,8 +894,8 @@ async function resolveUpstreamEntry(vid, batch, refresh, callerSignal) {
             logger.info('AppSource', `新设备刚完成注册可能仍在跨集群同步中，等待 ${FRESH_DEVICE_RETRY_DELAY_MS}ms 后重试播放通道...`);
             await sleepWithSignal(FRESH_DEVICE_RETRY_DELAY_MS, internalSignal);
             const retrySteps = [
-                { kind: 'multi', apiBase: 'https://api5-normal-lq.fqnovel.com/novel/player/multi_video_model/player/v1' },
                 { kind: 'multi', apiBase: VIDEO_API },
+                { kind: 'multi', apiBase: 'https://api5-normal-lq.fqnovel.com/novel/player/multi_video_model/player/v1' },
                 { kind: 'shortplay', apiBase: SHORTPLAY_API },
                 { kind: 'shortplay', apiBase: 'https://api5-normal-lq.fqnovel.com/novel/player/video_model/v1/' },
                 ...TAB_APIS.map(apiBase => ({ kind: 'tab', apiBase })),

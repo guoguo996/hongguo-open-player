@@ -15,19 +15,21 @@ const registration = { code: 0, device_id_str: '987654321012345', install_id_str
 test('cookie store respects domain, path, deletion, expiry and Max-Age precedence', () => {
   const jar = new CookieJar();
   const update = applyCookies(jar, PLAYBACK_URL, { 'set-cookie': [
-    'sid=private; Domain=fqnovel.com; Path=/novel; Secure; Max-Age=3600; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
+    'sid=private; Domain=snssdk.com; Path=/novel; Secure; Max-Age=3600; Expires=Thu, 01 Jan 1970 00:00:00 GMT',
     'hostonly=secret; Path=/',
-    'wrong=secret; Domain=snssdk.com; Path=/',
+    'wrong=secret; Domain=fqnovel.com; Path=/',
     'ttreq=single-use; Path=/',
     'past=expired; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/',
   ] });
   assert.deepEqual(update, { received: 5, accepted: 3, rejected: 2 });
   assert.match(jar.getCookieStringSync(PLAYBACK_URL), /sid=private/);
   assert.doesNotMatch(jar.getCookieStringSync(PLAYBACK_URL), /wrong|ttreq|past/);
-  assert.equal(jar.getCookieStringSync('https://reading.snssdk.com/novel/'), '');
+  // 播放主通道已切至 reading.snssdk.com：snssdk.com 域 Cookie 可跨子域携带，
+  // fqnovel.com 域 Cookie 不匹配，host-only Cookie 不外溢到无关主机。
+  assert.equal(jar.getCookieStringSync('https://example.com/novel/'), '');
   assert.equal(jar.getCookieStringSync('https://other.fqnovel.com/unrelated'), '');
-  assert.equal(jar.getCookieStringSync('https://other.fqnovel.com/novel/test'), 'sid=private');
-  applyCookies(jar, PLAYBACK_URL, { 'set-cookie': 'sid=gone; Domain=fqnovel.com; Path=/novel; Max-Age=0' });
+  assert.equal(jar.getCookieStringSync('https://other.snssdk.com/novel/test'), 'sid=private');
+  applyCookies(jar, PLAYBACK_URL, { 'set-cookie': 'sid=gone; Domain=snssdk.com; Path=/novel; Max-Age=0' });
   assert.doesNotMatch(jar.getCookieStringSync(PLAYBACK_URL), /sid=/);
   // Cookies still expire after serialization/restart; no unknown legacy tokens are broadcast.
   const saved = jar.serializeSync();

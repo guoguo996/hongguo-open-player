@@ -2,7 +2,8 @@
 const { CookieJar, Cookie } = require('tough-cookie');
 const crypto = require('node:crypto');
 
-const PLAYBACK_URL = 'https://api5-normal-sinfonlinea.fqnovel.com/novel/player/multi_video_model/player/v1';
+// 仅用于诊断展示的播放端点（与 app-source.js VIDEO_API 保持一致）
+const PLAYBACK_URL = 'https://reading.snssdk.com/novel/player/multi_video_model/preload/v1';
 const IDENTITY_COOKIES = new Set(['install_id', 'store-region', 'store-region-src']);
 
 function createJar(device) {
