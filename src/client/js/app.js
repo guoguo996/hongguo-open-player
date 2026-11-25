@@ -1666,6 +1666,8 @@ const app = createApp({
 
     // 弹窗内剧评（整季整体评论，与分集评论不同接口：/api/series-comments）
     const seriesComments = ref({ loading: false, items: [], total: 0, has_more: false, cursor: '', notice: '', key: '' });
+    // 剧评独立弹窗：从详情弹窗入口点开后展示，不与详情其他内容混排
+    const showSeriesCommentsModal = ref(false);
     let seriesCommentsRequest = 0;
     async function loadSeriesComments(force = false) {
       const seriesId = String(activeSeries.value?.series_id || '');
@@ -1708,6 +1710,67 @@ const app = createApp({
       }
     }
 
+    // 剧评独立弹窗开关：数据仍随详情打开时预取（入口按钮显示条数），点开后直接渲染
+    function openSeriesCommentsModal() {
+      showSeriesCommentsModal.value = true;
+      loadSeriesComments();
+      if (typeof nextTick === 'function') {
+        nextTick(() => {
+          document?.querySelector?.('.series-comments-modal')?.focus?.();
+        });
+      }
+    }
+
+    function closeSeriesCommentsModal() {
+      showSeriesCommentsModal.value = false;
+      keepPlayerFocus();
+    }
+
+    function onSeriesCommentsModalKeydown(e) {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        e.preventDefault();
+        closeSeriesCommentsModal();
+      }
+    }
+
+    // 剧评回评：优先用剧评接口内嵌的 reply_list（零额外请求），缺失时走独立回评接口兜底
+    async function toggleSeriesCommentReplies(item) {
+      if (!item.reply_count) return;
+      if (item.replies_open) { item.replies_open = false; return; }
+      item.replies_open = true;
+      if (item.replies_loaded || (Array.isArray(item.replies) && item.replies.length)) return;
+      const seriesId = String(activeSeries.value?.series_id || '');
+      item.replies_loading = true;
+      item.replies_notice = '';
+      try {
+        const data = await fetch(`/api/series-comment-replies/${encodeURIComponent(seriesId)}/${encodeURIComponent(item.comment_id)}`).then(r => r.json());
+        item.replies = Array.isArray(data.items) ? data.items : [];
+        item.replies_has_more = Boolean(data.has_more);
+        item.replies_cursor = typeof data.cursor === 'string' ? data.cursor : '';
+        item.replies_notice = data.notice || (data.success ? '' : '回复加载失败');
+      } catch (_) {
+        item.replies_notice = '回复加载失败';
+      }
+      item.replies_loaded = true;
+      item.replies_loading = false;
+    }
+
+    async function loadMoreSeriesCommentReplies(item) {
+      if (!item.replies_has_more || item.replies_loading) return;
+      const seriesId = String(activeSeries.value?.series_id || '');
+      item.replies_loading = true;
+      try {
+        const data = await fetch(`/api/series-comment-replies/${encodeURIComponent(seriesId)}/${encodeURIComponent(item.comment_id)}?cursor=${encodeURIComponent(item.replies_cursor || '')}`).then(r => r.json());
+        const seen = new Set((item.replies || []).map(r => r.comment_id));
+        item.replies = (item.replies || []).concat((Array.isArray(data.items) ? data.items : []).filter(r => !seen.has(r.comment_id)));
+        item.replies_has_more = Boolean(data.has_more);
+        item.replies_cursor = typeof data.cursor === 'string' ? data.cursor : '';
+        if (data.notice) item.replies_notice = data.notice;
+      } catch (_) { /* 保留已加载内容，静默失败 */ }
+      item.replies_loading = false;
+    }
+
     function openDramaDetail() {
       if (!activeSeries.value) return;
       if (typeof document !== 'undefined') {
@@ -1724,6 +1787,7 @@ const app = createApp({
 
     function closeDramaDetail() {
       showDramaDetailModal.value = false;
+      showSeriesCommentsModal.value = false;
       if (lastFocusedBeforeDramaModal && typeof lastFocusedBeforeDramaModal.focus === 'function') {
         try { lastFocusedBeforeDramaModal.focus(); } catch (_) {}
       }
@@ -2031,6 +2095,7 @@ const app = createApp({
       clearTimeout(controlsHideTimer);
       showDramaDetailModal.value = false;
       showSeasonsModal.value = false;
+      showSeriesCommentsModal.value = false;
       relatedWorks.value = [];
       relatedWorksNotice.value = '';
       sidebarTab.value = 'episodes';
@@ -2906,6 +2971,12 @@ const app = createApp({
       detailSocialRating,
       detailSocialCount,
       seriesComments,
+      showSeriesCommentsModal,
+      openSeriesCommentsModal,
+      closeSeriesCommentsModal,
+      onSeriesCommentsModalKeydown,
+      toggleSeriesCommentReplies,
+      loadMoreSeriesCommentReplies,
       loadMoreSeriesComments,
       openDramaDetail,
       closeDramaDetail,

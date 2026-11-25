@@ -726,21 +726,13 @@
           <button class="modal-close-btn" @click="closeDramaDetail" title="关闭 (Esc)">✕</button>
         </div>
         <div class="drama-modal-body">
-          <!-- 本剧剧评（整季整体评论，与右侧分集评论不同接口） -->
+          <!-- 本剧剧评入口：点击后由独立弹窗展示，不与详情其他内容混排 -->
           <div class="drama-series-comments">
-            <h4 class="intro-heading">💬 剧评<template v-if="seriesComments.total">（{{ seriesComments.total }}）</template></h4>
-            <p v-if="seriesComments.loading && !seriesComments.items.length" class="series-comments-notice">剧评加载中…</p>
-            <p v-else-if="seriesComments.notice && !seriesComments.items.length" class="series-comments-notice">{{ seriesComments.notice }}</p>
-            <div v-else class="series-comments-list">
-              <div v-for="item in seriesComments.items" :key="item.comment_id" class="series-comment-item">
-                <div class="series-comment-head">
-                  <span class="series-comment-name">{{ item.user_name }}</span>
-                  <span class="series-comment-stats">👍 {{ formatCount(item.digg_count) }}<template v-if="item.reply_count"> · 💬 {{ item.reply_count }}</template></span>
-                </div>
-                <p class="series-comment-text">{{ item.text }}</p>
-              </div>
-              <button v-if="seriesComments.has_more" type="button" class="series-comments-more" :disabled="seriesComments.loading" @click="loadMoreSeriesComments">{{ seriesComments.loading ? '加载中…' : '加载更多剧评' }}</button>
-            </div>
+            <button type="button" class="series-comments-open-btn" @click="openSeriesCommentsModal" title="查看本剧剧评">
+              <span class="series-comments-open-icon">💬</span> 剧评
+              <template v-if="seriesComments.total">（{{ seriesComments.total }}）</template>
+              <span class="series-comments-open-arrow">↗</span>
+            </button>
           </div>
           <!-- 系列全季快速切换 (已排好序) -->
           <div v-if="relatedSeasons.length > 1" class="drama-seasons-section">
@@ -894,6 +886,53 @@
             🔍 在全站搜索“{{ seriesBaseTitle }}”全部短剧
           </button>
           <button type="button" class="seasons-close-footer-btn" @click="closeSeasonsModal">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 剧评独立弹窗：整季整体评论，从详情弹窗入口点开 -->
+    <div v-if="showSeriesCommentsModal" class="seasons-modal-overlay" @click.self="closeSeriesCommentsModal" @keydown="onSeriesCommentsModalKeydown">
+      <div class="seasons-modal series-comments-modal" role="dialog" aria-modal="true" tabindex="-1" :aria-label="'《' + seriesBaseTitle + '》剧评'">
+        <div class="seasons-modal-header">
+          <div class="seasons-header-main">
+            <div class="seasons-header-title-row">
+              <span class="seasons-header-icon">💬</span>
+              <h3 class="seasons-header-title">《{{ seriesBaseTitle }}》剧评</h3>
+              <span v-if="seriesComments.total" class="seasons-count-tag">共 {{ seriesComments.total }} 条</span>
+            </div>
+          </div>
+          <button class="modal-close-btn" @click="closeSeriesCommentsModal" title="关闭 (Esc)">✕</button>
+        </div>
+        <div class="seasons-modal-body">
+          <p v-if="seriesComments.loading && !seriesComments.items.length" class="series-comments-notice">剧评加载中…</p>
+          <p v-else-if="seriesComments.notice && !seriesComments.items.length" class="series-comments-notice">{{ seriesComments.notice }}</p>
+          <div v-else class="series-comments-list">
+            <div v-for="item in seriesComments.items" :key="item.comment_id" class="series-comment-item">
+              <div class="series-comment-head">
+                <span class="series-comment-name">{{ item.user_name }}</span>
+                <span class="series-comment-stats">👍 {{ formatCount(item.digg_count) }}<template v-if="item.reply_count"> · 💬 {{ item.reply_count }}</template></span>
+              </div>
+              <p class="series-comment-text">{{ item.text }}</p>
+              <button v-if="item.reply_count" type="button" class="series-reply-toggle" @click="toggleSeriesCommentReplies(item)">
+                {{ item.replies_open ? '收起回复' : `💬 展开 ${item.reply_count} 条回复` }}
+              </button>
+              <div v-if="item.replies_open" class="series-reply-panel">
+                <p v-if="item.replies_loading && !(item.replies || []).length" class="series-comments-notice">回复加载中…</p>
+                <p v-else-if="item.replies_notice && !(item.replies || []).length" class="series-comments-notice">{{ item.replies_notice }}</p>
+                <div v-else class="series-reply-list">
+                  <div v-for="r in item.replies" :key="r.reply_id" class="series-comment-item series-reply-item">
+                    <div class="series-comment-head">
+                      <span class="series-comment-name">{{ r.user_name }}</span>
+                      <span class="series-comment-stats">👍 {{ formatCount(r.digg_count) }}</span>
+                    </div>
+                    <p class="series-comment-text">{{ r.text }}</p>
+                  </div>
+                  <button v-if="item.replies_has_more" type="button" class="series-comments-more" :disabled="item.replies_loading" @click="loadMoreSeriesCommentReplies(item)">{{ item.replies_loading ? '加载中…' : '加载更多回复' }}</button>
+                </div>
+              </div>
+            </div>
+            <button v-if="seriesComments.has_more" type="button" class="series-comments-more" :disabled="seriesComments.loading" @click="loadMoreSeriesComments">{{ seriesComments.loading ? '加载中…' : '加载更多剧评' }}</button>
+          </div>
         </div>
       </div>
     </div>

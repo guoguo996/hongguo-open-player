@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  fetchVideoComments, fetchSeriesComments, buildCommentBody, mapComment, parseCommentJson,
+  fetchVideoComments, fetchSeriesComments, fetchSeriesCommentReplies, buildCommentBody, mapComment, parseCommentJson,
 } = require('../../src/server/native/video-comments');
 
 const VID = '7673382597912710168';
@@ -90,7 +90,7 @@ test('fetchVideoComments 回传 cursor 翻页', async () => {
   assert.equal(result.items[0].text, '第二页');
 });
 
-test('fetchSeriesComments 使用剧评通道 cs=1011/sc=0/ct=2/gt=2 且 group_id=seriesId', async () => {
+test('fetchSeriesComments 使用剧评通道 cs=601/sc=0/ct=2/gt=4（lf 域）且 group_id=seriesId', async () => {
   let captured = null;
   const transport = async (url, body, config) => {
     captured = { url, body: JSON.parse(body), headers: config.headers };
@@ -102,22 +102,109 @@ test('fetchSeriesComments 使用剧评通道 cs=1011/sc=0/ct=2/gt=2 且 group_id
       },
     });
   };
-  const result = await fetchSeriesComments({ seriesId: SID, transport, device: { deviceId: '7398123456789012345', installId: '7398123456789012346' } });
+  const result = await fetchSeriesComments({ seriesId: SID, cache: false, transport, device: { deviceId: '7398123456789012345', installId: '7398123456789012346' } });
   assert.equal(result.success, true);
   assert.equal(result.items.length, 2);
   assert.equal(result.total, 509);
   assert.equal(result.has_more, true);
   assert.equal(result.cursor, '20');
   assert.equal(result.items[0].text, '整季好看');
-  assert.equal(captured.headers['Comment-Source'], '1011');
+  assert.equal(captured.headers['Comment-Source'], '601');
   assert.equal(captured.headers['Server-Channel'], '0');
-  assert.equal(captured.body.comment_source, 1011);
+  assert.equal(captured.body.comment_source, 601);
   assert.equal(captured.body.server_channel, 0);
   assert.equal(captured.body.comment_type, 2);
-  assert.equal(captured.body.group_type, 2);
+  assert.equal(captured.body.group_type, 4);
   assert.equal(captured.body.group_id, SID);
   assert.equal(captured.body.business_param.book_id, SID);
+  assert.ok(captured.url.includes('api5-normal-lf.fqnovel.com'));
   assert.ok(captured.url.includes(`/novel/commentapi/comment/list/${SID}/v1/`));
+});
+
+test('fetchSeriesComments 主通道灰度拒绝(103001)时自动切换候选通道', async () => {
+  const urls = [];
+  const transport = async (url) => {
+    urls.push(url);
+    if (urls.length === 1) return ok({ code: 103001, data: null });
+    return ok({ code: 0, data: { data_list: [commentRow({ text: '备通道剧评' })], common_list_info: { total: 564, has_more: false, cursor: '' } } });
+  };
+  const result = await fetchSeriesComments({ seriesId: SID, cache: false, transport, device: { deviceId: '7398123456789012345', installId: '7398123456789012346' } });
+  assert.equal(urls.length, 2);
+  assert.ok(urls[0].includes('api5-normal-lf.fqnovel.com'));
+  assert.ok(urls[1].includes('api5-normal-hl.fqnovel.com'));
+  assert.equal(result.success, true);
+  assert.equal(result.total, 564);
+  assert.equal(result.items[0].text, '备通道剧评');
+});
+
+test('fetchSeriesComments 全部候选灰度拒绝时给友好 notice', async () => {
+  const transport = async () => ok({ code: 103001, data: null });
+  const result = await fetchSeriesComments({ seriesId: SID, cache: false, transport, device: { deviceId: '7398123456789012345', installId: '7398123456789012346' } });
+  assert.equal(result.success, false);
+  assert.ok(result.notice.includes('103001'));
+});
+
+test('fetchSeriesComments 成功结果进缓存且失败时回退最近一次成功内容', async () => {
+  const CACHE_SID = '779988777666555444';
+  let failing = false;
+  const transport = async () => {
+    if (failing) return ok({ code: 103001, data: null });
+    return ok({ code: 0, data: { data_list: [commentRow({ text: '缓存样本剧评' })], common_list_info: { total: 7, has_more: false, cursor: '' } } });
+  };
+  const device = { deviceId: '7398123456789012345', installId: '7398123456789012346' };
+  const good = await fetchSeriesComments({ seriesId: CACHE_SID, transport, device });
+  assert.equal(good.success, true);
+  // TTL 内重复请求直接命中缓存，不再打上游
+  let called = false;
+  const counting = async () => { called = true; return ok({ code: 0, data: { data_list: [], common_list_info: {} } }); };
+  const hit = await fetchSeriesComments({ seriesId: CACHE_SID, transport: counting, device });
+  assert.equal(called, false);
+  assert.equal(hit.items[0].text, '缓存样本剧评');
+  // 上游进入频控窗口（103001）时回退缓存内容
+  failing = true;
+  const stale = await fetchSeriesComments({ seriesId: CACHE_SID, transport, device, fresh: true });
+  assert.equal(stale.success, true);
+  assert.equal(stale.items[0].text, '缓存样本剧评');
+  assert.ok(stale.notice.includes('103001'));
+  // 翻页请求不走缓存
+  const page2 = await fetchSeriesComments({ seriesId: CACHE_SID, cursor: 'x', transport, device });
+  assert.equal(page2.success, false);
+});
+
+test('fetchSeriesCommentReplies 有数据通道时返回回复列表', async () => {
+  let captured = null;
+  const transport = async (url, body, config) => {
+    captured = { url, body: JSON.parse(body), headers: config.headers };
+    return ok({
+      code: 0,
+      data: {
+        reply_list: [{ reply_id: '7690999876543210123', common: { content: { text: '楼主说得对' }, create_timestamp: 1786710830, user_info: { base_info: { user_name: '追更侠' } } }, stat: { digg_count: 3 } }],
+        comment_list_info: { total: 3, has_more: true, cursor: '5' },
+      },
+    });
+  };
+  const result = await fetchSeriesCommentReplies({
+    seriesId: SID, commentId: '7690991828636173118', transport,
+    device: { deviceId: '7398123456789012345', installId: '7398123456789012346' },
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.items.length, 1);
+  assert.equal(result.items[0].text, '楼主说得对');
+  assert.equal(result.items[0].user_name, '追更侠');
+  assert.equal(result.total, 3);
+  assert.equal(result.has_more, true);
+  assert.equal(result.cursor, '5');
+  assert.equal(captured.body.comment_id, '7690991828636173118');
+  assert.equal(captured.body.group_id, SID);
+  assert.equal(captured.body.business_param.book_id, SID);
+  assert.ok(captured.url.includes('/novel/commentapi/reply/list/7690991828636173118/v1/'));
+});
+
+test('fetchSeriesCommentReplies 无效参数给友好提示', async () => {
+  const transport = async () => ok({ code: 0, data: { reply_list: [], comment_list_info: {} } });
+  const result = await fetchSeriesCommentReplies({ seriesId: 'bad', commentId: '12', transport });
+  assert.equal(result.success, false);
+  assert.ok(result.notice.includes('红果来源'));
 });
 
 test('fetchSeriesComments 回传 cursor 翻页且非法 seriesId 转中文 notice', async () => {

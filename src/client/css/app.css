@@ -2371,9 +2371,43 @@ html.platform-win .app-header { padding-right: 160px; }
   font-size: 12px;
 }
 .detail-rating-count { color: var(--text-sub); font-size: 12px; font-weight: 500; margin-left: 4px; }
-/* 详情弹窗内嵌剧评（整季评论） */
+/* 详情弹窗剧评入口（点击后在独立弹窗展示） */
 .drama-series-comments { margin-bottom: 14px; }
+.series-comments-open-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-sub);
+  padding: 7px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.series-comments-open-btn:hover { color: var(--accent); border-color: var(--accent); }
+.series-comments-open-icon { font-size: 14px; }
+.series-comments-open-arrow { font-size: 12px; color: var(--text-dim); }
+.series-comments-open-btn:hover .series-comments-open-arrow { color: var(--accent); }
+/* 剧评独立弹窗：沿用全季弹窗骨架，收窄宽度以适合评论流 */
+.series-comments-modal { width: min(560px, 92vw); }
+.series-comments-modal .seasons-modal-body { padding-top: 12px; }
 .series-comments-notice { margin: 8px 0; color: var(--text-dim); font-size: 13px; }
+/* 剧评回评（展开回复面板） */
+.series-reply-toggle {
+  margin-top: 4px;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+.series-reply-toggle:hover { text-decoration: underline; }
+.series-reply-panel { margin-top: 8px; padding-left: 14px; border-left: 2px solid var(--border-color); }
+.series-reply-item { padding: 8px 0 0; border-top: none; }
+.series-reply-item:first-child { border-top: none; }
 .series-comments-list { display: flex; flex-direction: column; gap: 8px; }
 .series-comment-item {
   background: var(--bg-card);

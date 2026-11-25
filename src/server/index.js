@@ -169,7 +169,17 @@ app.get('/api/series-comments/:seriesId', async (req, res) => {
   const { seriesId } = req.params;
   if (!/^\d{6,30}$/.test(seriesId)) return res.status(400).json({ error: '剧集编号无效' });
   const cursor = typeof req.query.cursor === 'string' && req.query.cursor.length <= 40 ? req.query.cursor : '';
-  const result = await require('./native/video-comments').fetchSeriesComments({ seriesId, cursor });
+  const result = await require('./native/video-comments').fetchSeriesComments({ seriesId, cursor, fresh: req.query.fresh === '1' });
+  res.set('Cache-Control', 'no-store');
+  res.json(result);
+});
+
+// 剧评回评列表（只读）：上游对剧评回复通道灰度未放行时返回友好 notice
+app.get('/api/series-comment-replies/:seriesId/:commentId', async (req, res) => {
+  const { seriesId, commentId } = req.params;
+  if (!/^\d{6,30}$/.test(seriesId) || !/^\d{6,30}$/.test(commentId)) return res.status(400).json({ error: '参数无效' });
+  const cursor = typeof req.query.cursor === 'string' && req.query.cursor.length <= 40 ? req.query.cursor : '';
+  const result = await require('./native/video-comments').fetchSeriesCommentReplies({ seriesId, commentId, cursor });
   res.set('Cache-Control', 'no-store');
   res.json(result);
 });

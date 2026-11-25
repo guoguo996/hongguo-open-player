@@ -144,14 +144,30 @@ async function fetchVideoComments(options = {}) {
   }
 }
 
-// 剧评（整季评论）通道：与分集评论完全不同的一组路由参数——
-// comment_source=1011 / server_channel=0 / comment_type=2 / group_type=2，group_id 直接用 seriesId。
-// 经本机实扫（2026-11-23，4 host × 7 source × 6 group_type 矩阵）实证：仅此组合返回真实剧评
-// （实测某剧 total=509，内容为针对整部剧的评论），分集评论的 4/18/4/30 换成 seriesId 只会返回空。
-const SERIES_COMMENT_SOURCE = 1011;
+// 剧评（整季评论）通道：与分集评论完全不同的一组路由参数——group_id 直接用 seriesId。
+// 经本机实扫矩阵（4 host × source × group_type）：
+//   2026-11-23：仅 cs=1011/sc=0/ct=2/gt=2（sinfonlineb）返回真实剧评（total=509）；
+//   2026-11-25：1011 通道被上游灰度关闭（code=103001），重扫后可用组合变为
+//     cs=601/gt=4（api5-normal-lf，两次实测稳定 total=564）与
+//     cs=601/gt=30（api5-normal-hl，灰度窗口飘忽、时通时断）。
+// 条目结构与分集评论相同（{ comment: {...} } 包裹），mapComment 通用。
+// 上游灰度随 host/组合漂移，故按候选顺序尝试，灰度拒绝（103001）时自动切换下一个。
+const SERIES_COMMENT_SOURCE = 601;
+const SERIES_CANDIDATES = [
+  { host: 'api5-normal-lf.fqnovel.com', groupType: 4 },
+  { host: 'api5-normal-hl.fqnovel.com', groupType: 30 },
+];
+
+// 剧评内存缓存（stale-while-error）：上游对剧评接口存在按设备的频控——短时间连续
+// 请求会触发 code=103001 静默限流（N3urda #118 描述的同款机制，窗口数分钟）。
+// 成功结果缓存 10 分钟，期内重复打开直接命中；限流/网络失败时回退最近一次成功
+// 内容（无论多久前），避免把配额烧在重试上，也保证界面多数时候有内容。
+const seriesCommentCache = new Map(); // seriesId -> { at, result }
+const SERIES_CACHE_TTL = 10 * 60 * 1000;
 
 /**
  * 拉取整季剧评（针对整部剧的评论，非单集）。
+ * @param {object} [options] cursor/fresh/transport/device/now/random/cache
  * @returns {Promise<{success:boolean, items:Array, total:number, has_more:boolean, cursor:string, notice:string, error:string}>}
  */
 async function fetchSeriesComments(options = {}) {
@@ -160,56 +176,67 @@ async function fetchSeriesComments(options = {}) {
   if (!/^\d{6,30}$/.test(seriesId)) {
     return { ...base, notice: '仅红果来源的剧集支持查看剧评' };
   }
-  const transport = options.transport || axios.post;
+  const useCache = options.cache !== false && !(typeof options.cursor === 'string' && options.cursor);
   const now = options.now || Date.now;
+  const cached = seriesCommentCache.get(seriesId);
+  if (useCache && !options.fresh && cached && now() - cached.at < SERIES_CACHE_TTL) {
+    return { ...cached.result, notice: cached.result.notice || '' };
+  }
+  const transport = options.transport || axios.post;
   const random = options.random || crypto.randomBytes;
   try {
-    const stampMs = now();
-    const stamp = Math.floor(stampMs / 1000);
-    const nonce = random(sign.NONCE_BYTES);
     const { deviceId, installId } = options.device || await resolveDeviceIdentity();
-    const rawQuery = sign.buildQuery({ stampMs, deviceId, installId });
-    const url = `${BASE_URL}${COMMENT_PATH(seriesId)}?${rawQuery}`;
-    const headers = {
-      'User-Agent': USER_AGENT,
-      Accept: 'application/json',
-      'X-XS-From-Web': '0',
-      'Sdk-Version': '2',
-      'Content-Type': 'application/json; charset=utf-8',
-      'Comment-Source': String(SERIES_COMMENT_SOURCE),
-      'Server-Channel': '0',
-      ...sign.signCommentHeaders({ rawQuery, stamp, nonce }),
-    };
-    const body = {
-      comment_source: SERIES_COMMENT_SOURCE,
-      server_channel: 0,
-      group_id: seriesId,
-      group_type: 2,
-      comment_type: 2,
-      sort: 1,
-      need_count: true,
-      count: PAGE_COUNT,
-      cursor: typeof options.cursor === 'string' ? options.cursor : '',
-      aid: 8662,
-      compliance_status: 0,
-      business_param: { book_id: seriesId, req_type: 0 },
-    };
-    const response = await transport(url, JSON.stringify(body), {
-      headers,
-      timeout: REQUEST_TIMEOUT,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT),
-      maxRedirects: 0,
-      responseType: 'text',
-      maxContentLength: MAX_RESPONSE_BYTES,
-    });
-    const raw = typeof response?.data === 'string' ? response.data : JSON.stringify(response?.data ?? null);
-    let payload;
-    try { payload = parseCommentJson(raw); } catch (_) {
-      return { ...base, notice: '剧评接口返回了非 JSON 内容' };
+    let payload = null;
+    let lastCode = -1;
+    for (const candidate of SERIES_CANDIDATES) {
+      const stampMs = now();
+      const stamp = Math.floor(stampMs / 1000);
+      const nonce = random(sign.NONCE_BYTES);
+      const rawQuery = sign.buildQuery({ stampMs, deviceId, installId });
+      const url = `https://${candidate.host}${COMMENT_PATH(seriesId)}?${rawQuery}`;
+      const headers = {
+        'User-Agent': USER_AGENT,
+        Accept: 'application/json',
+        'X-XS-From-Web': '0',
+        'Sdk-Version': '2',
+        'Content-Type': 'application/json; charset=utf-8',
+        'Comment-Source': String(SERIES_COMMENT_SOURCE),
+        'Server-Channel': '0',
+        ...sign.signCommentHeaders({ rawQuery, stamp, nonce }),
+      };
+      const body = {
+        comment_source: SERIES_COMMENT_SOURCE,
+        server_channel: 0,
+        group_id: seriesId,
+        group_type: candidate.groupType,
+        comment_type: 2,
+        sort: 1,
+        need_count: true,
+        count: PAGE_COUNT,
+        cursor: typeof options.cursor === 'string' ? options.cursor : '',
+        aid: 8662,
+        compliance_status: 0,
+        business_param: { book_id: seriesId, req_type: 0 },
+      };
+      const response = await transport(url, JSON.stringify(body), {
+        headers,
+        timeout: REQUEST_TIMEOUT,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT),
+        maxRedirects: 0,
+        responseType: 'text',
+        maxContentLength: MAX_RESPONSE_BYTES,
+      });
+      const raw = typeof response?.data === 'string' ? response.data : JSON.stringify(response?.data ?? null);
+      try { payload = parseCommentJson(raw); } catch (_) {
+        return staleOr(base, '剧评接口返回了非 JSON 内容');
+      }
+      lastCode = Number(payload?.code ?? payload?.Code ?? -1);
+      if (lastCode === 0) break; // 当前候选通道可用，直接使用其结果
     }
-    const code = Number(payload?.code ?? payload?.Code ?? -1);
-    // 剧评通道由上游灰度控制（实测窗口性放行：handler 时有时无），拒绝时统一给友好提示
-    if (code !== 0) return { ...base, notice: `剧评服务暂时不可用（code=${code}），请稍后再试` };
+    // 全部候选均被灰度拒绝（如 103001，多为频控窗口）时回退缓存
+    if (!payload || lastCode !== 0) {
+      return staleOr(base, `剧评服务暂时不可用（code=${lastCode}），请稍后再试`);
+    }
     const data = payload?.data || {};
     const list = Array.isArray(data.data_list) ? data.data_list : [];
     const items = list.map(mapComment).filter(Boolean);
@@ -217,12 +244,22 @@ async function fetchSeriesComments(options = {}) {
     const total = Number(info.total) || 0;
     const hasMore = Boolean(info.has_more);
     const cursor = typeof info.cursor === 'string' ? info.cursor : (info.cursor ? JSON.stringify(info.cursor) : '');
-    return { success: true, items, total, has_more: hasMore, cursor, notice: items.length || total ? '' : '暂无剧评', error: '' };
+    const result = { success: true, items, total, has_more: hasMore, cursor, notice: items.length || total ? '' : '暂无剧评', error: '' };
+    if (useCache && (items.length || total)) seriesCommentCache.set(seriesId, { at: now(), result });
+    return result;
   } catch (error) {
     const notice = error?.code === 'ECONNABORTED' || error?.name === 'TimeoutError' || error?.code === 'ERR_CANCELED'
       ? '剧评加载超时，请稍后重试'
       : '剧评加载失败，请检查网络后重试';
-    return { ...base, notice, error: notice };
+    return staleOr({ ...base, error: notice }, notice);
+  }
+
+  // 失败时回退最近一次成功结果（无论多久之前）：多数时候保证界面有内容可看
+  function staleOr(fallback, notice) {
+    if (useCache && cached) {
+      return { ...cached.result, notice: `${notice}；已为你展示最近获取的剧评`, error: '' };
+    }
+    return { ...fallback, notice };
   }
 }
 
@@ -386,6 +423,102 @@ async function fetchCommentReplies(options = {}) {
   }
 }
 
+// 剧评回评（整季评论下的回复）。经实扫（2026-11-25，多窗口观测）：
+//   - reply/list 对剧评 comment_id 的 601/501 组合即使在 601 评论通道开启窗口内
+//     仍返回 103001 或空（上游未对匿名 API 暴露剧评回复数据）；
+//   - 504（分集评论回复通道）对剧评 comment_id 返回 code=0 但恒为空。
+// 因此按候选顺序尝试，全部无数据时给友好提示；上游若未来放行，调整候选即可。
+const BASE_URL_HOST = 'api5-normal-sinfonlineb.fqnovel.com';
+const SERIES_REPLY_CANDIDATES = [
+  { host: 'api5-normal-lf.fqnovel.com', source: 601, commentType: 2, groupType: 4 },
+  { host: 'api5-normal-lf.fqnovel.com', source: 601, commentType: 2, groupType: 30 },
+  { host: BASE_URL_HOST, source: 504, commentType: 4, groupType: 30 },
+];
+
+/**
+ * 拉取某条剧评下的回复列表（只读，匿名可调用）。
+ * @returns {Promise<{success:boolean, items:Array, total:number, has_more:boolean, cursor:string, notice:string, error:string}>}
+ */
+async function fetchSeriesCommentReplies(options = {}) {
+  const base = { success: false, items: [], total: 0, has_more: false, cursor: '', notice: '', error: '' };
+  const seriesId = str(options.seriesId);
+  const commentId = str(options.commentId);
+  const cursor = str(options.cursor);
+  if (!/^\d{6,30}$/.test(seriesId) || !/^\d{6,30}$/.test(commentId)) {
+    return { ...base, notice: '仅红果来源的剧评支持查看回复' };
+  }
+  const transport = options.transport || axios.post;
+  const now = options.now || Date.now;
+  const random = options.random || crypto.randomBytes;
+  try {
+    const { deviceId, installId } = options.device || await resolveDeviceIdentity();
+    let lastNotice = '';
+    for (const candidate of SERIES_REPLY_CANDIDATES) {
+      const stampMs = now();
+      const stamp = Math.floor(stampMs / 1000);
+      const nonce = random(sign.NONCE_BYTES);
+      const rawQuery = sign.buildQuery({ stampMs, deviceId, installId });
+      const url = `https://${candidate.host}${REPLY_LIST_PATH(commentId)}?${rawQuery}`;
+      const headers = {
+        'User-Agent': USER_AGENT,
+        Accept: 'application/json',
+        'X-XS-From-Web': '0',
+        'Sdk-Version': '2',
+        'Content-Type': 'application/json; charset=utf-8',
+        'Comment-Source': String(candidate.source),
+        'Server-Channel': '0',
+        ...sign.signCommentHeaders({ rawQuery, stamp, nonce }),
+      };
+      const body = {
+        business_param: { book_id: seriesId, need_count: true },
+        comment_id: commentId,
+        comment_source: candidate.source,
+        comment_type: candidate.commentType,
+        count: PAGE_COUNT,
+        group_id: seriesId,
+        group_type: candidate.groupType,
+        ...(cursor ? { cursor } : {}),
+      };
+      const response = await transport(url, JSON.stringify(body), {
+        headers,
+        timeout: REQUEST_TIMEOUT,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT),
+        maxRedirects: 0,
+        responseType: 'text',
+        maxContentLength: MAX_RESPONSE_BYTES,
+      });
+      const raw = typeof response?.data === 'string' ? response.data : JSON.stringify(response?.data ?? null);
+      let payload;
+      try { payload = parseCommentJson(raw); } catch (_) {
+        return { ...base, notice: '回复接口返回了非 JSON 内容' };
+      }
+      const code = Number(payload?.code ?? payload?.Code ?? -1);
+      const data = payload?.data || {};
+      const list = Array.isArray(data.reply_list) ? data.reply_list : [];
+      if (code === 0 && list.length) {
+        const items = list.map(mapReply).filter(Boolean);
+        const info = data.comment_list_info && typeof data.comment_list_info === 'object' ? data.comment_list_info : {};
+        return {
+          success: true,
+          items,
+          total: Number(info.total) || items.length,
+          has_more: Boolean(info.has_more),
+          cursor: str(info.cursor),
+          notice: '',
+          error: '',
+        };
+      }
+      lastNotice = code === 0 ? '暂无回复' : `回复服务暂时不可用（code=${code}），请稍后再试`;
+    }
+    return { ...base, notice: lastNotice || '暂无回复' };
+  } catch (error) {
+    const notice = error?.code === 'ECONNABORTED' || error?.name === 'TimeoutError' || error?.code === 'ERR_CANCELED'
+      ? '回复加载超时，请稍后重试'
+      : '回复加载失败，请检查网络后重试';
+    return { ...base, notice, error: notice };
+  }
+}
+
 function mapReply(raw) {
   // 一级评论的 common 键为小写，回复为大写 Common（服务端历史不一致），两边都试
   const common = raw?.common && typeof raw.common === 'object' ? raw.common
@@ -414,7 +547,7 @@ function mapReply(raw) {
 }
 
 module.exports = {
-  fetchVideoComments, fetchCommentReplies, likeVideoComment, fetchSeriesComments,
+  fetchVideoComments, fetchCommentReplies, likeVideoComment, fetchSeriesComments, fetchSeriesCommentReplies,
   buildCommentBody, mapComment, mapReply, parseCommentJson, postCommentWrite,
   BASE_URL, COMMENT_PATH, DO_ACTION_PATH, REPLY_LIST_PATH, REPLY_LIST_SOURCE, SERIES_COMMENT_SOURCE, USER_AGENT, PAGE_COUNT,
 };
