@@ -6,7 +6,7 @@
 // Vendored materials: vendor/sdk-playback (see vendor/sdk-playback/vendor/SOURCE.md,
 // upstream waligoraamodio288-rgb/hongguo-desktop-releases v1.0.104 via
 // jackotom/hongguo-drama 8.3 scripts/sdk-playback).
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -32,16 +32,85 @@ function vendorScriptPath() {
     return path.join(__dirname, '..', '..', '..', 'vendor', 'sdk-playback', 'resolve_cli.py');
 }
 
+const HELPER_IMPORT_CHECK = 'import requests, Crypto, unicorn';
+
+// Windows 上 `python` 可能只是 Microsoft Store 的占位程序（执行即退出），
+// 因此逐个探测候选解释器，只接受能导入全部依赖的那个。
+function pythonCandidates() {
+    const candidates = [];
+    const envPython = (process.env.HONGGUO_SDK_PYTHON || '').trim();
+    if (envPython) candidates.push({ command: envPython, prefix: [] });
+    if (process.platform === 'win32') {
+        candidates.push({ command: 'py', prefix: ['-3'] });
+        candidates.push({ command: 'python', prefix: [] });
+        candidates.push({ command: 'python3', prefix: [] });
+        const launcher = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Launcher', 'py.exe');
+        if (fs.existsSync(launcher)) candidates.push({ command: launcher, prefix: ['-3'] });
+        const installRoot = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python');
+        try {
+            const versions = fs.readdirSync(installRoot)
+                .filter(name => /^Python3\d+$/.test(name))
+                .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+            for (const version of versions) {
+                const exe = path.join(installRoot, version, 'python.exe');
+                if (fs.existsSync(exe)) candidates.push({ command: exe, prefix: [] });
+            }
+        } catch { /* 目录不存在时忽略 */ }
+    } else {
+        candidates.push({ command: 'python3', prefix: [] });
+        candidates.push({ command: 'python', prefix: [] });
+    }
+    return candidates;
+}
+
+function probePython(candidate) {
+    try {
+        const result = spawnSync(candidate.command, [...candidate.prefix, '-c', HELPER_IMPORT_CHECK], {
+            stdio: 'ignore',
+            timeout: 20000,
+            windowsHide: true,
+        });
+        return !result.error && result.status === 0;
+    } catch {
+        return false;
+    }
+}
+
+let resolvedPython = null;
+function resolvePythonCommand() {
+    if (resolvedPython) return resolvedPython;
+    for (const candidate of pythonCandidates()) {
+        if (!probePython(candidate)) continue;
+        resolvedPython = candidate;
+        return candidate;
+    }
+    throw sdkError('SDK helper 需要可用的 Python 3（需包含 requests/pycryptodome/unicorn），可用环境变量 HONGGUO_SDK_PYTHON 指定解释器路径', 'SDK_UNAVAILABLE');
+}
+
 // Packaged builds may ship a PyInstaller helper; the raw python script is the
 // development default. Both speak the same --serve JSONL protocol.
+function bundledHelperPaths() {
+    if (!process.resourcesPath) return null;
+    const base = path.join(process.resourcesPath, 'sdk-playback');
+    return {
+        exe: path.join(base, process.platform === 'win32' ? 'hongguo-sdk-playback.exe' : 'hongguo-sdk-playback'),
+        python: path.join(base, 'python', process.platform === 'win32' ? 'python.exe' : path.join('bin', 'python3')),
+        script: path.join(base, 'resolve_cli.py'),
+    };
+}
+
 function resolveHelperCommand() {
-    const bundled = process.resourcesPath
-        ? path.join(process.resourcesPath, 'sdk-playback', process.platform === 'win32' ? 'hongguo-sdk-playback.exe' : 'hongguo-sdk-playback')
-        : null;
-    if (bundled && fs.existsSync(bundled)) return { command: bundled, baseArgs: [] };
+    const bundled = bundledHelperPaths();
+    if (bundled && fs.existsSync(bundled.exe)) return { command: bundled.exe, baseArgs: [] };
+    // PyInstaller 单文件引导器默认开启 Control Flow Guard，helper 会拒绝运行，
+    // 因此 Windows 发布包改为内置嵌入式 Python 运行时 + 原始脚本。
+    if (bundled && fs.existsSync(bundled.python) && fs.existsSync(bundled.script)) {
+        return { command: bundled.python, baseArgs: [bundled.script] };
+    }
     const script = vendorScriptPath();
     if (!fs.existsSync(script)) throw sdkError('SDK 取源物料缺失', 'SDK_UNAVAILABLE');
-    return { command: process.platform === 'win32' ? 'py' : 'python3', baseArgs: ['-3', script] };
+    const python = resolvePythonCommand();
+    return { command: python.command, baseArgs: [...python.prefix, script] };
 }
 
 function resolveCacheDir() {

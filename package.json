@@ -83,6 +83,14 @@
         {
           "from": "build/bytevc2/${arch}",
           "to": "bytevc2"
+        },
+        {
+          "from": "vendor/sdk-playback",
+          "to": "sdk-playback"
+        },
+        {
+          "from": "build/sdk-playback/python",
+          "to": "sdk-playback/python"
         }
       ],
       "target": [
