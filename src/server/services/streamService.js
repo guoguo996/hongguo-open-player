@@ -4,6 +4,7 @@ const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const rangeMedia = require('./rangeMedia');
 const appSource = require('../native/app-source');
+const playSource = require('../native/play-source');
 const { decryptMp4Buffer } = require('../native/hongguo');
 const { transcodeBytevc2, streamBytevc2, supportsHevcDecoder } = require('../native/bytevc2-transcode');
 const { normalizeDownloadQuality } = require('../native/download-quality');
@@ -294,7 +295,7 @@ class StreamService {
   async loadBuffer(vid, quality, signal, allowHevc = true) {
     const t0 = Date.now();
     logger.info('StreamService', `[Decrypt] 开始全量拉取并解密视频: vid=${vid}, quality=${quality}`);
-    const playInfo = await appSource.fetchAppPlayUrl(vid, {
+    const playInfo = await playSource.fetchPlayUrl(vid, {
       quality,
       allowLowerQuality: true,
       allowBytevc2: true,
@@ -390,7 +391,7 @@ class StreamService {
     if (cached && (cached.active || cached.expires > Date.now() + minValidityMs)) { this.plans.delete(key); this.plans.set(key, cached); return cached.plan; }
     const t0 = Date.now();
     logger.info('StreamService', `开始构建流式分片播放计划: vid=${vid}, quality=${quality}`);
-    const info = await appSource.fetchAppPlayUrl(vid, {
+    const info = await playSource.fetchPlayUrl(vid, {
       quality,
       allowLowerQuality: true,
       allowBytevc2: true,

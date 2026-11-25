@@ -47,9 +47,9 @@ const VIDEO_UA = 'com.phoenix.read/71332 (Linux; U; Android 16; zh_CN; 25053RT47
 const PLAYBACK_UA = 'com.phoenix.read/74332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)';
 // v5 playback uses the official 7.3.9.32 PGT-AN10 profile (see hongguoTV MobilePlayback.kt).
 const V5_PLAYBACK_UA = 'com.phoenix.read/73932 (Linux; U; Android 12; zh_CN_#Hans; PGT-AN10; Build/V417IR;tt-ok/3.12.13.20)';
-// PR #107 成功画像：preload/v1 通道使用系统默认 Dalvik UA（真机 http.agent），
-// 与 74532 设备参数（Redmi 25053RT47C / Android 16）保持同一设备描述。
-const V5_PRELOAD_UA = 'Dalvik/2.1.0 (Linux; U; Android 16; 25053RT47C Build/BP2A.250605.031.A3)';
+// PR #107 成功画像：preload/v1 通道使用 okhttp 默认 UA（jackotom/hongguo-drama 8.2
+// 实测有效的同款画像：field21=312 + device_level 2 + 74532 全参数 + okhttp UA）。
+const V5_PRELOAD_UA = 'okhttp/4.12.0';
 // 7.4.5.32 App 请求画像（PR #107 验证组合）。键序与上游 linkedMap 一致，
 // medusa 对最终 query 串签名，顺序不可乱。
 const V5_PLAYBACK_QUERY = {
@@ -1034,4 +1034,4 @@ function clearSeriesSocialCache(seriesId) {
     if (sid) socialCache.delete(sid);
 }
 
-module.exports = { fetchAppPlayUrl, fetchSeriesEpisodeSocial, clearSeriesSocialCache, clearEntryCache, isHevcCodec, signedSearchRequest, signedMetadataRequest, signedAccountRequest, parseSearchInteger, requestJson, playbackRequest, shortplayRequest, SEARCH_API, SEARCH_UA };
+module.exports = { fetchAppPlayUrl, fetchSeriesEpisodeSocial, clearSeriesSocialCache, clearEntryCache, isHevcCodec, parseEntryPlayInfo, signedSearchRequest, signedMetadataRequest, signedAccountRequest, parseSearchInteger, requestJson, playbackRequest, shortplayRequest, SEARCH_API, SEARCH_UA };

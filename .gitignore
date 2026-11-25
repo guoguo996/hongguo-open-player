@@ -11,6 +11,8 @@ logs/
 .DS_Store
 *.log
 *.apk
+__pycache__/
+*.pyc
 
 # 本地审计与审查记录
 /reviews/

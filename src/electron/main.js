@@ -412,6 +412,7 @@ if (!gotTheLock) {
       mainWindow = null;
     }
     require('../server/services/streamService').shutdown();
+    require('../server/native/sdk-playback').shutdownSdkPlayback();
     serverInstance.close();
     serverInstance.closeAllConnections?.();
     require('../server/services/storeService').pending.catch(console.error).finally(() => app.quit());

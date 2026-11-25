@@ -645,7 +645,7 @@ async function fetchPlayUrlSingle(vid, sid, options = {}) {
     const cacheKey = `play:${sid || ''}:${vid}${quality === 'auto' ? '' : `:${quality}`}${skipWeb ? ':fallback' : ''}${allowLowerQuality ? ':lower-quality' : ''}`;
     const result = await cachedRequest(cacheKey, 30000, () => quality === 'auto'
       ? fetchPlayUrlFresh(vid, sid, skipWeb)
-      : require('./app-source').fetchAppPlayUrl(String(vid), { quality, allowLowerQuality }).catch(error => {
+      : require('./play-source').fetchPlayUrl(String(vid), { quality, allowLowerQuality }).catch(error => {
         throw unavailableSources([sourceFailure('app', error)], allowLowerQuality ? 'auto' : quality);
       }), options);
     // Last-resort web recovery must not replace App priority during the penalty window.
@@ -690,7 +690,7 @@ async function fetchPlayUrlFresh(vid, sid, skipWeb = false) {
   if (web && web.url) return web;
 
   try {
-    return await require('./app-source').fetchAppPlayUrl(String(vid));
+    return await require('./play-source').fetchPlayUrl(String(vid));
   } catch (error) {
     sources.push(sourceFailure('app', error));
   }

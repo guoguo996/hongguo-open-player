@@ -5,6 +5,7 @@ const hgAppSearch = require('../native/hongguo-app-search');
 const hgCatalog = require('../native/hongguo-app-catalog');
 const hgRecommend = require('../native/hongguo-recommend');
 const appSource = require('../native/app-source');
+const playSource = require('../native/play-source');
 const logger = require('./logger');
 
 class DramaService {
@@ -165,7 +166,7 @@ class DramaService {
     if (!vid) throw new Error('缺少 vid 参数');
     const t0 = Date.now();
     logger.info('DramaService', `解析单集播放元信息 vid=${vid}, quality=${quality}`);
-    const playInfo = await appSource.fetchAppPlayUrl(String(vid), { quality, allowLowerQuality: true });
+    const playInfo = await playSource.fetchPlayUrl(String(vid), { quality, allowLowerQuality: true });
     if (!playInfo || !playInfo.url) {
       logger.error('DramaService', `未能解析到有效的播放地址 vid=${vid}`);
       throw new Error('未能解析到有效的播放地址');
