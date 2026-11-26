@@ -555,6 +555,11 @@ const FRESH_DEVICE_RETRY_DELAY_MS = 1500;
 const PLAYBACK_COOLDOWN_MS = 60000;
 const playbackCooldownByDevKey = new Map();
 let lastPoolRotateAt = 0;
+// 连续冷却失败计数与全新注册限频：池内轮换（5 分钟限一次）换到的设备若也被打穿，
+// 后续客户端退避重试（约 80 秒窗口）内不能再干等——连续第 2 次冷却失败时自动注册
+// 全新设备接管（90 秒限频 + 刚注册的设备不重复注册，避免配额枯竭期的注册风暴）。
+let consecutiveCooldownFailures = 0;
+let lastFreshRotateAt = 0;
 function inPlaybackCooldown(devKey) {
     return (playbackCooldownByDevKey.get(devKey) || 0) > Date.now();
 }
@@ -571,6 +576,27 @@ function tryRotateToPooledDevice() {
     if (Date.now() - lastPoolRotateAt < 5 * 60 * 1000) return null;
     lastPoolRotateAt = Date.now();
     return getPlaybackDevice.rotateToPooledDevice();
+}
+
+// 播放失败自动换设备：优先池内历史可用设备；池轮换不可用且已连续 2 次冷却失败时，
+// 降级为注册全新设备（同样有限频，详见上方注释）。
+async function autoRotateOnPlaybackFailure(device, execRequestJson, signal) {
+    consecutiveCooldownFailures += 1;
+    const pooled = tryRotateToPooledDevice();
+    if (pooled) {
+        logger.info('AppSource', `播放失败自动换设备: 已切至设备池历史可用设备 device_id=${pooled.device_id}`);
+        return;
+    }
+    const now = Date.now();
+    const deviceJustRegistered = device?.created_at && now - device.created_at < 90 * 1000;
+    if (consecutiveCooldownFailures < 2 || now - lastFreshRotateAt < 90 * 1000 || deviceJustRegistered) return;
+    lastFreshRotateAt = now;
+    try {
+        const fresh = await getPlaybackDevice.rotateDevice(execRequestJson, signal);
+        logger.info('AppSource', `播放失败自动换设备: 池内候选不可用，已注册全新设备 device_id=${fresh.device_id}`);
+    } catch (err) {
+        logger.warn('AppSource', `播放失败自动注册新设备未成功: ${err.message}`);
+    }
 }
 
 function clearEntryCache(vid) {
@@ -906,14 +932,14 @@ async function resolveUpstreamEntry(vid, batch, refresh, callerSignal) {
         if (result.response) {
             // 任一通道成功即撤销冷却：冷却只是限频窗口的保守估计，上游恢复后不应残留。
             playbackCooldownByDevKey.delete(devKey);
+            consecutiveCooldownFailures = 0;
         } else if (result.allEmpty && result.lastError?.code === 'EMPTY_RESPONSE') {
             // 标记冷却并以冷却错误返回：客户端收到 RATE_LIMIT_COOLDOWN 会走长退避
             // 而不触发“空响应自动换设备”——避免零信任的新设备绕过熔断继续风暴。
             markPlaybackCooldown(devKey);
-            // 同步尝试设备池轮换：切到历史可用设备后，退避重试将以新身份（无冷却）
-            // 直连上游，若该设备已被放行则直接恢复播放。
-            const rotated = tryRotateToPooledDevice();
-            if (rotated) logger.info('AppSource', `已轮换至设备池历史可用设备 device_id=${rotated.device_id}，退避后将以新身份重试`);
+            // 播放失败自动换设备：先切设备池历史可用设备，池轮换不可用且连续失败时
+            // 注册全新设备（限频防风暴）；客户端退避重试将以新身份（无冷却）直连上游。
+            await autoRotateOnPlaybackFailure(device, execRequestJson, internalSignal);
             throw Object.assign(new Error('上游风控冷却中，稍后自动恢复'), { code: 'RATE_LIMIT_COOLDOWN', status: 503 });
         }
 
