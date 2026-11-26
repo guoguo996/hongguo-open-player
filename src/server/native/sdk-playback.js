@@ -23,9 +23,22 @@ let session = null;
 let sessionCooldownUntil = 0;
 let nextRequestId = 1;
 const modelCache = new Map();
+// 最近一次 SDK 通道的根因（排除冷却/超时等衍生状态）：SDK_COOLDOWN 只是崩溃后的
+// 60 秒退避提示，客户端需要看到第一次失败的真实原因（缺 Python/依赖/启动崩溃等）。
+let lastFatalReason = null;
 
 function sdkError(message, code = 'SDK_PLAYBACK_FAILED') {
     return Object.assign(new Error(message), { code });
+}
+
+function recordFatalReason(error) {
+    const code = String(error?.code || '');
+    if (code === 'SDK_COOLDOWN' || code === 'SDK_TIMEOUT') return; // 衍生状态不覆盖根因
+    lastFatalReason = { code: code || 'SDK_PLAYBACK_FAILED', message: String(error?.message || '').slice(0, 240) };
+}
+
+function lastSdkFailureReason() {
+    return lastFatalReason;
 }
 
 function vendorScriptPath() {
@@ -269,21 +282,27 @@ async function fetchSdkPlayUrl(vid, options = {}) {
     const requestedQuality = normalizeDownloadQuality(options.quality);
     vid = String(vid || '');
     if (!/^\d{1,30}$/.test(vid)) throw new Error('分集编号无效');
-    const { model, userAgent } = await resolveModel(vid, options.signal, options.refresh === true);
-    const deadline = Date.now() + 12000;
-    const timeoutSignal = AbortSignal.timeout(12000);
-    const signal = options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal;
-    const appSource = require('./app-source');
-    const info = await appSource.parseEntryPlayInfo(vid, { video_model: model }, requestedQuality,
-        options.allowLowerQuality === true && requestedQuality !== 'auto', deadline, signal,
-        options.allowBytevc2 === true, options.allowHevc !== false, options.allowHevcTranscode === true);
-    if (userAgent) {
-        info.userAgent = userAgent;
-        if (Array.isArray(info.variants)) {
-            info.variants = info.variants.map(variant => ({ ...variant, userAgent }));
+    try {
+        const { model, userAgent } = await resolveModel(vid, options.signal, options.refresh === true);
+        const deadline = Date.now() + 12000;
+        const timeoutSignal = AbortSignal.timeout(12000);
+        const signal = options.signal ? AbortSignal.any([timeoutSignal, options.signal]) : timeoutSignal;
+        const appSource = require('./app-source');
+        const info = await appSource.parseEntryPlayInfo(vid, { video_model: model }, requestedQuality,
+            options.allowLowerQuality === true && requestedQuality !== 'auto', deadline, signal,
+            options.allowBytevc2 === true, options.allowHevc !== false, options.allowHevcTranscode === true);
+        lastFatalReason = null; // 成功即清除历史根因，避免误导后续诊断
+        if (userAgent) {
+            info.userAgent = userAgent;
+            if (Array.isArray(info.variants)) {
+                info.variants = info.variants.map(variant => ({ ...variant, userAgent }));
+            }
         }
+        return info;
+    } catch (error) {
+        recordFatalReason(error);
+        throw error;
     }
-    return info;
 }
 
 function clearSdkModelCache() {
@@ -299,4 +318,4 @@ process.on('exit', () => {
     if (session && !session.child.killed) session.child.kill();
 });
 
-module.exports = { fetchSdkPlayUrl, clearSdkModelCache, shutdownSdkPlayback };
+module.exports = { fetchSdkPlayUrl, clearSdkModelCache, shutdownSdkPlayback, lastSdkFailureReason };

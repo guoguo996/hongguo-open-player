@@ -2501,10 +2501,10 @@ const app = createApp({
                 } catch (_) { bytevc2Fallback(); return; }
                 video.play().catch(() => {});
               } else if (errData?.code === 'RATE_LIMIT_COOLDOWN') {
-                videoErrorMessage.value = '上游风控冷却中；稍后自动重试，请勿频繁操作';
+                videoErrorMessage.value = sdkRootHint(errData) || '上游风控冷却中；稍后自动重试，请勿频繁操作';
                 tryCooldownRetry();
               } else if (errData?.code === 'EMPTY_RESPONSE' || /返回空响应/.test(errData?.error || '')) {
-                videoErrorMessage.value = '上游接口返回空响应（设备鉴权受限）；正在自动生成新设备ID并重试…';
+                videoErrorMessage.value = sdkRootHint(errData) || '上游接口返回空响应（设备鉴权受限）；正在自动生成新设备ID并重试…';
                 autoResetDeviceAndRetry(errData?.code || 'EMPTY_RESPONSE');
               } else if (errData?.code === 'DEVICE_REGISTRATION_FAILED' || /匿名播放设备注册失败|ERR_NETWORK/i.test(errData?.error || '')) {
                 videoErrorMessage.value = '播放设备注册受阻（ERR_NETWORK）；正在尝试生成新设备ID…';
@@ -2569,6 +2569,13 @@ const app = createApp({
 
     // 服务端风控熔断（RATE_LIMIT_COOLDOWN，冷却 60 秒）：10 秒长退避重试，最多 8 次
     // （覆盖超过冷却窗口）；不消耗常规重试计数，播放恢复（时间更新走动）后一并清零。
+    // SDK 根因透传：服务端在双通道全败时把 SDK 失败原因拼进 error 消息，此处提取展示，
+    // 避免只看到"风控冷却中"而掩盖"缺 Python/依赖"等真实环境问题。
+    function sdkRootHint(errData) {
+      const text = String(errData?.error || '');
+      const idx = text.indexOf('SDK 通道亦不可用');
+      return idx >= 0 ? text.slice(idx) : '';
+    }
     let cooldownRetryCount = 0;
     let lastCooldownAt = 0;
     function tryCooldownRetry() {

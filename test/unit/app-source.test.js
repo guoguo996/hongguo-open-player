@@ -103,7 +103,7 @@ test('fetchAppPlayUrl batches nextVids and caches returned models in entryCache'
     assert.equal(new URL(url).searchParams.get('version_name'), '7.4.5.32');
     assert.equal(new URL(url).searchParams.get('device_type'), '25053RT47C');
     assert.equal(new URL(url).searchParams.has('ts'), false);
-    assert.ok(options.headers['User-Agent'].startsWith('Dalvik/'), 'preload 通道使用 Dalvik 系统 UA');
+    assert.ok(options.headers['User-Agent'].startsWith('okhttp/'), 'preload 通道使用 okhttp UA（jackotom 8.2 同款画像）');
     requests.push({ url, body: JSON.parse(gunzipSync(options.data)) });
     return {
       code: 0,
