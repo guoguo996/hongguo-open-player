@@ -34,6 +34,9 @@ function sdkError(message, code = 'SDK_PLAYBACK_FAILED') {
 function recordFatalReason(error) {
     const code = String(error?.code || '');
     if (code === 'SDK_COOLDOWN' || code === 'SDK_TIMEOUT') return; // 衍生状态不覆盖根因
+    // 客户端切集/超时会主动 abort 请求（AbortError），不是 SDK 通道的真实故障，
+    // 记进去只会让透传提示显示误导性的 "This operation was aborted"。
+    if (error?.name === 'AbortError' || /abort/i.test(String(error?.message || ''))) return;
     lastFatalReason = { code: code || 'SDK_PLAYBACK_FAILED', message: String(error?.message || '').slice(0, 240) };
 }
 
