@@ -136,17 +136,19 @@ const app = createApp({
     }
 
     // 根据文本长度和点赞标识预估弹幕的物理渲染像素宽度
-    function estimateDanmakuWidth(text, likes = 0) {
-      let width = 12; // 基础边距
+    function estimateDanmakuWidth(text, likes = 0, fontSize = 20) {
+      // 以 20px 为基准按实际字号等比缩放
+      const scale = Math.max(0.5, Number(fontSize) || 20) / 20;
+      let width = 12 * scale; // 基础边距
       const str = String(text || '');
       for (let i = 0; i < str.length; i++) {
         const code = str.charCodeAt(i);
         // ASCII 半角字符约 10px，全角/中文约 20px (对应 font-size: 20px)
-        width += (code >= 0x20 && code <= 0x7e) ? 10 : 20;
+        width += ((code >= 0x20 && code <= 0x7e) ? 10 : 20) * scale;
       }
       if (likes > 0) {
         const likeStr = '+' + likes;
-        width += 6 + likeStr.length * 8;
+        width += (6 + likeStr.length * 8) * scale;
       }
       return width;
     }
@@ -167,6 +169,7 @@ const app = createApp({
       const rows = Math.max(1, Number(options.rows) || 3);
       const screenWidth = Math.max(320, Number(options.screenWidth) || 800);
       const speedOption = options.speed || 'medium';
+      const fontSize = Number(options.fontSize) || 20;
       const speedFactor = { fast: 12, medium: 16, slow: 20 }[speedOption] || 16;
       const duration = speedFactor;
 
@@ -174,7 +177,7 @@ const app = createApp({
       const candidates = items.map((item, index) => {
         const likes = Number.isSafeInteger(item.likes) && item.likes > 0 ? item.likes : 0;
         const time = Number(item.time) || 0;
-        const width = estimateDanmakuWidth(item.text, likes);
+        const width = estimateDanmakuWidth(item.text, likes, fontSize);
         return {
           raw: item,
           time,
@@ -289,6 +292,7 @@ const app = createApp({
       const prioritized = prioritizeDanmakuItems(danmakuItems.value, {
         rows: danmakuRows.value,
         speed: danmakuSpeed.value,
+        fontSize: danmakuFontSize.value,
         screenWidth: layer.offsetWidth || 800,
         likesPriority: danmakuLikesPriority.value
       });
@@ -342,7 +346,7 @@ const app = createApp({
         const response = await fetch('/api/preferences');
         if (!response.ok) throw new Error('读取失败');
         const prefs = await response.json();
-        const refs = { danmakuEnabled, danmakuRows, danmakuOpacity, danmakuSpeed, danmakuLikesPriority, volume, isMuted, playbackRate, fitMode, videoQuality };
+        const refs = { danmakuEnabled, danmakuRows, danmakuOpacity, danmakuFontSize, danmakuSpeed, danmakuLikesPriority, volume, isMuted, playbackRate, fitMode,videoQuality };
         for (const [key, value] of Object.entries(prefs)) {
           if (refs[key] && !changedPreferences.has(key)) refs[key].value = value;
         }
@@ -369,6 +373,22 @@ const app = createApp({
       refreshDanmakuEngine();
     }
     const danmakuOpacity = ref(0.8);
+    // 弹幕字号（通过 +/- 按钮调整，同时决定弹幕层每行的行高）
+    const DANMAKU_FONT_SIZE_MIN = 12;
+    const DANMAKU_FONT_SIZE_MAX = 45;
+    const danmakuFontSize = ref(20);
+    function changeDanmakuFontSize(delta) {
+      const current = Number(danmakuFontSize.value) || 20;
+      const next = Math.min(DANMAKU_FONT_SIZE_MAX, Math.max(DANMAKU_FONT_SIZE_MIN, current + delta));
+      if (next === current) return;
+      danmakuFontSize.value = next;
+      savePreferences({ danmakuFontSize: next });
+    }
+    const danmakuLayerHeight = computed(() => {
+      const rows = Math.max(1, Number(danmakuRows.value) || 3);
+      const lineHeight = Math.round((Number(danmakuFontSize.value) || 20) * 1.6);
+      return `${rows * lineHeight}px`;
+    });
     const danmakuItems = ref([]);
     const danmakuStatus = ref('');
     let danmakuKey = '';
@@ -410,7 +430,7 @@ const app = createApp({
       if (likes >= 1) return '#a8dcff';
       return '#ffffff';
     }
-    watch([danmakuLayer, videoEl, danmakuRows, danmakuSpeed, danmakuLikesPriority], refreshDanmakuEngine, { flush: 'post' });
+    watch([danmakuLayer, videoEl, danmakuRows, danmakuFontSize, danmakuSpeed, danmakuLikesPriority], refreshDanmakuEngine, { flush: 'post' });
     const showAboutModal = ref(false);
     const appVersion = ref('');
     const showShortcutsModal = ref(false);
@@ -2894,7 +2914,7 @@ const app = createApp({
     });
 
     return {
-      savePreferences, danmakuEnabled, showDanmakuSettings, danmakuRows, danmakuOpacity, danmakuSpeed, danmakuLikesPriority, toggleLikesPriority, prioritizeDanmakuItems, estimateDanmakuWidth, calculateRequiredGap, danmakuStatus, danmakuLayer, danmakuColor, toggleDanmaku, loadDanmaku,
+      savePreferences, danmakuEnabled, showDanmakuSettings, danmakuRows, danmakuOpacity, danmakuFontSize, danmakuFontSizeMin: DANMAKU_FONT_SIZE_MIN, danmakuFontSizeMax: DANMAKU_FONT_SIZE_MAX, changeDanmakuFontSize, danmakuLayerHeight, danmakuSpeed, danmakuLikesPriority, toggleLikesPriority, prioritizeDanmakuItems, estimateDanmakuWidth, calculateRequiredGap, danmakuStatus, danmakuLayer, danmakuColor, toggleDanmaku, loadDanmaku,
       toastText, osdMessage, sidebarOpen, isScrubbing, previewTime, previewPercent, showPreview,
       isFullscreen, isControlsHidden, resetControlsTimer, clearControlsTimer, setControlsHidden, handleWindowMouseMove,
       previewSeek, seekFromSlider, startScrubbing, finishScrubbing,
