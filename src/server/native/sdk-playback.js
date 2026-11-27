@@ -12,6 +12,7 @@ const os = require('node:os');
 const path = require('node:path');
 const logger = require('../services/logger');
 const { normalizeDownloadQuality } = require('./download-quality');
+const { isValidVid } = require('./vid-format');
 
 const REQUEST_TIMEOUT_MS = 60000;
 const MODEL_CACHE_TTL_MS = 2 * 60 * 1000;
@@ -284,7 +285,7 @@ async function resolveModel(vid, signal, fresh = false) {
 async function fetchSdkPlayUrl(vid, options = {}) {
     const requestedQuality = normalizeDownloadQuality(options.quality);
     vid = String(vid || '');
-    if (!/^\d{1,30}$/.test(vid)) throw new Error('分集编号无效');
+    if (!isValidVid(vid)) throw new Error('分集编号无效');
     try {
         const { model, userAgent } = await resolveModel(vid, options.signal, options.refresh === true);
         const deadline = Date.now() + 12000;

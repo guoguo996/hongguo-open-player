@@ -9,6 +9,7 @@ const { decryptMp4Buffer } = require('../native/hongguo');
 const { transcodeBytevc2, streamBytevc2, supportsHevcDecoder } = require('../native/bytevc2-transcode');
 const { normalizeDownloadQuality } = require('../native/download-quality');
 const { webMediaRequestOptions } = require('../native/web-media-guard');
+const { isValidVid } = require('../native/vid-format');
 const logger = require('./logger');
 
 class StreamService {
@@ -337,7 +338,7 @@ class StreamService {
    * 预加载下一集 (Prefetch)
    */
   prefetch(vid, quality = 'auto', metadataOnly = false, minValidityMs = 0, nextVids = [], allowHevc = true) {
-    if (!vid || !/^\d{1,30}$/.test(String(vid))) return;
+    if (!vid || !isValidVid(String(vid))) return;
     const key = this.cacheKey(vid, quality, allowHevc);
     if (metadataOnly && this.plans.get(key)?.expires > Date.now() + minValidityMs) return;
     if (this.cache.has(key) || this.inFlight.has(key) || this.prefetchTimers.has(key)) return;
@@ -515,12 +516,12 @@ class StreamService {
     if (req.query?.next_vids) {
       for (const v of req.query.next_vids.split(',')) {
         const clean = v.trim();
-        if (/^\d{1,30}$/.test(clean) && !nextVids.includes(clean)) nextVids.push(clean);
+        if (isValidVid(clean) && !nextVids.includes(clean)) nextVids.push(clean);
       }
     }
     if (req.query?.next_vid) {
       const clean = String(req.query.next_vid).trim();
-      if (/^\d{1,30}$/.test(clean) && !nextVids.includes(clean)) nextVids.push(clean);
+      if (isValidVid(clean) && !nextVids.includes(clean)) nextVids.push(clean);
     }
     try {
       logger.info('StreamService', `收到流媒体Range请求: vid=${vid}, Range=${req.headers.range || '全量'}, quality=${quality}`);
@@ -656,7 +657,7 @@ class StreamService {
       if (req.query?.next_vids) {
         for (const v of req.query.next_vids.split(',')) {
           const clean = v.trim();
-          if (/^\d{1,30}$/.test(clean) && !nextVids.includes(clean)) nextVids.push(clean);
+          if (isValidVid(clean) && !nextVids.includes(clean)) nextVids.push(clean);
         }
       }
       const followVids = nextVids.filter(v => v !== String(req.query?.next_vid) && v !== String(vid));

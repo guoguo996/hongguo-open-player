@@ -8,6 +8,7 @@ const dramaService = require('./services/dramaService');
 const streamService = require('./services/streamService');
 const storeService = require('./services/storeService');
 const logger = require('./services/logger');
+const { isValidVid } = require('./native/vid-format');
 
 const app = express();
 // Plus 版默认 8900，避免与原版 hongguo-open-player（8899）同时运行时冲突。
@@ -436,12 +437,12 @@ app.get('/api/play/:vid', async (req, res) => {
  */
 app.post('/api/prefetch/:vid', (req, res) => {
   const { vid } = req.params;
-  if (!/^\d{1,30}$/.test(vid)) return res.status(400).json({ error: '无效的分集编号' });
+  if (!isValidVid(vid)) return res.status(400).json({ error: '无效的分集编号' });
   const nextVids = [];
   if (req.query?.next_vids) {
     for (const v of req.query.next_vids.split(',')) {
       const clean = v.trim();
-      if (/^\d{1,30}$/.test(clean) && !nextVids.includes(clean)) nextVids.push(clean);
+      if (isValidVid(clean) && !nextVids.includes(clean)) nextVids.push(clean);
     }
   }
   const allowHevc = req.query?.hevc !== '0';
