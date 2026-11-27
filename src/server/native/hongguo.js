@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const { URL } = require('node:url');
 const { normalizeDownloadQuality } = require('./download-quality');
 const { isPublicMediaUrl, webMediaRequestOptions } = require('./web-media-guard');
+const { isValidVid } = require('./vid-format');
 const logger = require('../services/logger');
 
 const API = "https://api5-normal-sinfonlineb.fqnovel.com";
@@ -235,7 +236,7 @@ function parseEpisodeListHtml(html, seriesId) {
   }
   if (!Array.isArray(detail.vid_list)) throw new Error('官网页面未找到分集数据（vid_list）');
   const vids = detail.vid_list.map(String);
-  if (vids.some(vid => !/^\d{1,30}$/.test(vid)) || new Set(vids).size !== vids.length) {
+  if (vids.some(vid => !isValidVid(vid)) || new Set(vids).size !== vids.length) {
     throw new Error('官网分集数据异常');
   }
   if (!vids.length) throw new Error('官网分集列表为空');
@@ -245,6 +246,9 @@ function parseEpisodeListHtml(html, seriesId) {
   const accessible = detail.accessible_episode_cnt;
   const webAccessibleEpisodes = accessible != null && /^\d+$/.test(String(accessible))
     ? Math.min(Number(accessible), vids.length) : null;
+  // 上游已对匿名身份只回前几集预览（vid_list 截断），页面里的 episode_cnt 仍是全集总数：
+  // 借鉴 jackotom/hongguo-drama 8.5，用它判定目录完整性，不完整则由上层走全集兜底通道。
+  const episodeCount = Number(detail.episode_cnt) || Number(detail.series_episode_info?.episode_cnt) || null;
 
   const episodes = vids.map((vid, i) => ({
     vid,
@@ -280,6 +284,8 @@ function parseEpisodeListHtml(html, seriesId) {
     series_title: seriesTitle,
     cover: cover || (episodes[0] && episodes[0].cover) || '',
     total: episodes.length,
+    episode_count: episodeCount,
+    complete: episodeCount == null || episodes.length >= episodeCount,
     web_accessible_episodes: webAccessibleEpisodes,
     episodes,
     intro,
@@ -508,58 +514,62 @@ async function fetchEpisodeListFromWeb(seriesId, deadline = 0) {
 
 async function fetchEpisodeListFresh(seriesId, { deadline = 0 } = {}) {
   let webError;
+  let expectedCount = null;
   try {
-    return await fetchEpisodeListFromWeb(seriesId, deadline);
+    const web = await fetchEpisodeListFromWeb(seriesId, deadline);
+    if (web.complete !== false) return web;
+    // 官网预览截断（如 5/566）：记录全集总数，后续通道按它校验完整性
+    webError = new Error(`官网仅返回 ${web.episodes.length}/${web.episode_count} 集预览`);
+    expectedCount = web.episode_count;
+    logger.warn('HongguoNative', `官网分集被预览截断，走全集兜底通道: seriesId=${seriesId}, ${webError.message}`);
   } catch (error) {
     webError = error;
-    logger.warn('HongguoNative', `官网网页分集获取未命中，回退至App备用接口: seriesId=${seriesId}, 原因: ${error.message}`);
   }
-  const body = {
-    biz_param: DETAIL_BIZ_PARAM,
-    dr_scene: "preload",
-    series_id: seriesId,
-  };
-  let j;
+  // App 详情：v5 签名 + 注册设备身份（旧静态头通道已被上游空响应封锁）。
+  // 返回的目录若仍少于全集总数，同样按截断处理并降级保留为 partial。
+  let appError;
+  let partial = null;
   try {
-    j = await apiCall("/novel/player/multi_video_detail/preload/v1", body, 3, 25000, deadline);
-  } catch (e) {
-    throw new Error(`获取分集失败：官网数据源（${webError.message}），备用接口（${e.message}）`);
+    const list = await require('./app-source').fetchAppEpisodeList(seriesId, { deadline: deadline || Date.now() + 15000 });
+    if (expectedCount && list.total < expectedCount) {
+      appError = new Error(`App 详情同样仅返回 ${list.total}/${expectedCount} 集预览`);
+      partial = list.episodes;
+      logger.warn('HongguoNative', `App 详情分集被预览截断: seriesId=${seriesId}, ${appError.message}`);
+    } else {
+      return list;
+    }
+  } catch (error) {
+    appError = error;
   }
-  if (!j || j.code !== 0) {
-    throw new Error("detail API 失败: " + JSON.stringify(j || {}).slice(0, 200));
+  return fetchEpisodeListWithFallback(seriesId, { deadline, webError, appError, expectedCount, partial });
+}
+
+// 全集兜底：合集接口（album_detail/v1）拉完整目录；失败时若有截断的部分列表则降级返回，
+// 否则向上抛出各通道的错误摘要。
+async function fetchEpisodeListWithFallback(seriesId, { deadline, webError, appError, expectedCount, partial } = {}) {
+  try {
+    const album = await require('./hongguo-creator-album').fetchCreatorAlbum(seriesId,
+      { deadline: deadline || Date.now() + 15000 });
+    logger.info('HongguoNative', `合集接口恢复全集目录成功: seriesId=${seriesId}, 共 ${album.total} 集`);
+    if (!partial || album.episodes.length >= partial.length) return album;
+  } catch (albumError) {
+    logger.warn('HongguoNative', `合集接口兜底失败: seriesId=${seriesId}, ${albumError.message}`);
   }
-  const d = j.data || {};
-  const requested = String(seriesId);
-  // Never take the first key from an object: a mismatched response must fail closed.
-  const sid = Object.prototype.hasOwnProperty.call(d, requested) ? requested : '';
-  if (!sid) {
-    throw new Error("备用接口返回的剧集与请求不一致");
+  if (partial && partial.length) {
+    partial.sort((a, b) => a.vid_index - b.vid_index);
+    return {
+      series_id: String(seriesId),
+      series_title: partial[0]?.series_title || '未命名短剧',
+      cover: partial[0]?.cover || '',
+      total: partial.length,
+      episodes: partial,
+    };
   }
-  const vd = d[sid]?.video_data || {};
-  if (vd.series_id && String(vd.series_id) !== sid) {
-    throw new Error("备用接口返回的剧集与请求不一致");
-  }
-  const vl = vd.video_list || [];
-  if (vl.some(item => item?.series_id && String(item.series_id) !== sid)) {
-    throw new Error("备用接口返回了其他剧集的分集");
-  }
-  const eps = vl.map((item) => ({
-    vid: String(item.vid),
-    vid_index: item.vid_index || 0,
-    title: item.title || '',
-    series_id: String(item.series_id || sid),
-    series_title: vd.series_title || '',
-    cover: vd.series_cover || vd.cover_url || item.cover_url || '',
-  }));
-  if (!eps.length) throw new Error('备用接口分集列表为空');
-  eps.sort((a, b) => a.vid_index - b.vid_index);
-  return {
-    series_id: String(sid),
-    series_title: vd.series_title || '未命名短剧',
-    cover: vd.series_cover || vd.cover_url || (eps[0] && eps[0].cover) || '',
-    total: eps.length,
-    episodes: eps,
-  };
+  const parts = [];
+  if (webError) parts.push(`官网数据源（${webError.message}）`);
+  if (appError) parts.push(`App详情（${appError.message}）`);
+  parts.push('合集兜底（不可用）');
+  throw new Error(`获取分集失败：${parts.join('，')}`);
 }
 
 /**
